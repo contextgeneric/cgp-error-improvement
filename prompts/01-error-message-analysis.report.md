@@ -1,4 +1,4 @@
-# Deep-Dive Analysis: Improving Rust Compiler Error Messages for Context-Generic Programming
+# Improving Rust Compiler Error Messages for Context-Generic Programming
 
 ## Executive Summary
 
