@@ -1,4 +1,4 @@
-# Prompt
+## Problem Statement
 
 The most profound challenge of adopting CGP is the overly verbose and obscure error messages that are produced by the Rust compiler, when there is a missing dependency in the CGP dependency graph.
 
@@ -12,6 +12,8 @@ Worse, very often the root cause of the errors are omitted by the Rust compiler,
 
 Your tasks is to produce a deep-dive research analysis on the current structure of the error messages, and how should the Rust compiler be updated to produce better error messages for the given examples.
 
+## Content Outline
+
 First, explain how the Rust compiler currently decide how to organize and display the error messages. Walk through the complexities and trade offs that the Rust compiler has to make to properly handle all kinds of error messages from all kinds of Rust code.
 
 Then explain how the strategy that the Rust compiler uses fail to take into account how CGP leverages the trait system to manage complex dependencies. Explain how this forces CGP to introduce `IsProviderFor` as a hack to force Rust to produce error messages without hiding the root cause, and that CGP is practically unusable without `IsProviderFor`.
@@ -22,14 +24,16 @@ It is also worth noting that although the previous fix attempt was made on the c
 
 Finally, come up with a pragmatic proposal on how to improve the Rust compiler to at least produce error messages that are slightly more comprehensible by CGP users. Ideally, Rust should produce sufficient error messages for base CGP without the help of `IsProviderFor`. But if that is not possible, the CGP project can live on with the `IsProviderFor` hack for now, but Rust should at least focus on trying to improve the error messages generated there.
 
+## Considerations
+
 Whenever possible, try to find ways for Rust to hide away errors from intermediary dependencies, and only show the top few dependencies and the root cause. More importantly, also explore how we can ensure that Rust would always produce error messages for the root cause, without it being accidentally hidden due to the heuristics to keep error messages brief.
+
+Keep in mind the concerns of the Rust compiler team, which is that they want to avoid any fix that would make error messages significantly more verbose for existing Rust code.
 
 There is a tension between keeping the error messages brief and surfacing the root cause. But having the root cause always shown is the most important primary objective. The secondary objective of making CGP errors more brief is only achievable if it does not disrupt the primary objective.
 
-You should assume that the reader is already familiar with CGP concepts and the challenge of error messages in CGP code. Instead, focus your analysis on the Rust compiler and the error reporting.
+You should assume that the reader is already familiar with CGP concepts and the challenge of error messages in CGP code. Skip explaining CGP-specific concepts. Instead, focus your analysis on the Rust compiler and the error reporting.
 
 Start your report by writing a summary, followed by a table of content. Before writing each chapter, start with a detailed outline of what you will write for each section in that chapter.
 
 Use full sentences and avoid point forms and tables.
-
-# Response
