@@ -1,0 +1,12 @@
+[package]
+name = "cgp-error-messages-example"
+version = "0.1.0"
+rust-version    = "1.90"
+edition         = "2024"
+license         = "MIT"
+repository      = "https://github.com/contextgeneric/cgp-examples"
+authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
+keywords        = ["cgp"]
+
+[dependencies]
+cgp = { version = "0.6.1" }

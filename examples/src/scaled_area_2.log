@@ -1,0 +1,97 @@
+error[E0277]: the trait bound `Rectangle: CanUseComponent<AreaCalculatorComponent>` is not satisfied
+  --> src/scaled_area_2.rs:58:9
+   |
+58 |         AreaCalculatorComponent,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `cgp::prelude::HasField<Symbol<12, cgp::prelude::Chars<'s', cgp::prelude::Chars<'c', cgp::prelude::Chars<'a', cgp::prelude::Chars<'l', cgp::prelude::Chars<'e', cgp::prelude::Chars<'_', cgp::prelude::Chars<'f', cgp::prelude::Chars<'a', cgp::prelude::Chars<'c', cgp::prelude::Chars<'t', cgp::prelude::Chars<'o', cgp::prelude::Chars<'r', Nil>>>>>>>>>>>>>>` is not implemented for `scaled_area_2::Rectangle`
+  --> src/scaled_area_2.rs:42:1
+   |
+42 | pub struct Rectangle {
+   | ^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `cgp::prelude::HasField<Tag>`
+  --> src/scaled_area_2.rs:41:10
+   |
+41 | #[derive(HasField)]
+   |          ^^^^^^^^
+   |          |
+   |          `scaled_area_2::Rectangle` implements `HasField<Symbol<5, Chars<'w', Chars<'i', Chars<'d', ...>>>>>`
+   |          `scaled_area_2::Rectangle` implements `HasField<Symbol<6, Chars<'h', Chars<'e', Chars<'i', ...>>>>>`
+note: required for `scaled_area_2::Rectangle` to implement `scaled_area_2::HasScaleFactor`
+  --> src/scaled_area_2.rs:25:1
+   |
+25 | #[cgp_auto_getter]
+   | ^^^^^^^^^^^^^^^^^^
+26 | pub trait HasScaleFactor {
+   |           ^^^^^^^^^^^^^^
+note: required for `scaled_area_2::ScaledArea<scaled_area_2::RectangleArea>` to implement `cgp::prelude::IsProviderFor<scaled_area_2::AreaCalculatorComponent, scaled_area_2::Rectangle>`
+  --> src/scaled_area_2.rs:30:1
+   |
+30 | #[cgp_impl(new ScaledArea<InnerCalculator>)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+33 |     Self: HasScaleFactor,
+   |           -------------- unsatisfied trait bound introduced here
+   = note: required for `scaled_area_2::Rectangle` to implement `cgp::prelude::CanUseComponent<scaled_area_2::AreaCalculatorComponent>`
+note: required by a bound in `scaled_area_2::CanUseRectangle`
+  --> src/scaled_area_2.rs:56:1
+   |
+56 | / check_components! {
+57 | |     CanUseRectangle for Rectangle {
+58 | |         AreaCalculatorComponent,
+59 | |     }
+60 | | }
+   | |_^ required by this bound in `CanUseRectangle`
+   = note: the full name for the type has been written to '/home/soares/development/cgp-error-improvement/examples/target/debug/deps/cgp_error_messages_example-4112920cd6086987.long-type-11286363639741879729.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+   = note: this error originates in the derive macro `HasField` which comes from the expansion of the macro `check_components` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+
+error[E0277]: the trait bound `Rectangle: CanUseComponent<AreaCalculatorComponent>` is not satisfied
+  --> src/scaled_area_2.rs:58:9
+   |
+58 |         AreaCalculatorComponent,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `cgp::prelude::HasField<Symbol<12, cgp::prelude::Chars<'s', cgp::prelude::Chars<'c', cgp::prelude::Chars<'a', cgp::prelude::Chars<'l', cgp::prelude::Chars<'e', cgp::prelude::Chars<'_', cgp::prelude::Chars<'f', cgp::prelude::Chars<'a', cgp::prelude::Chars<'c', cgp::prelude::Chars<'t', cgp::prelude::Chars<'o', cgp::prelude::Chars<'r', Nil>>>>>>>>>>>>>>` is not implemented for `scaled_area_2::Rectangle`
+  --> src/scaled_area_2.rs:42:1
+   |
+42 | pub struct Rectangle {
+   | ^^^^^^^^^^^^^^^^^^^^
+help: the following other types implement trait `cgp::prelude::HasField<Tag>`
+  --> src/scaled_area_2.rs:41:10
+   |
+41 | #[derive(HasField)]
+   |          ^^^^^^^^
+   |          |
+   |          `scaled_area_2::Rectangle` implements `HasField<Symbol<5, Chars<'w', Chars<'i', Chars<'d', ...>>>>>`
+   |          `scaled_area_2::Rectangle` implements `HasField<Symbol<6, Chars<'h', Chars<'e', Chars<'i', ...>>>>>`
+note: required for `scaled_area_2::Rectangle` to implement `scaled_area_2::HasScaleFactor`
+  --> src/scaled_area_2.rs:25:1
+   |
+25 | #[cgp_auto_getter]
+   | ^^^^^^^^^^^^^^^^^^
+26 | pub trait HasScaleFactor {
+   |           ^^^^^^^^^^^^^^
+note: required for `scaled_area_2::ScaledArea<scaled_area_2::RectangleArea>` to implement `cgp::prelude::IsProviderFor<scaled_area_2::AreaCalculatorComponent, scaled_area_2::Rectangle>`
+  --> src/scaled_area_2.rs:30:1
+   |
+30 | #[cgp_impl(new ScaledArea<InnerCalculator>)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+33 |     Self: HasScaleFactor,
+   |           -------------- unsatisfied trait bound introduced here
+   = note: required for `scaled_area_2::Rectangle` to implement `cgp::prelude::CanUseComponent<scaled_area_2::AreaCalculatorComponent>`
+note: required by a bound in `scaled_area_2::CanUseRectangle`
+  --> src/scaled_area_2.rs:56:1
+   |
+56 | / check_components! {
+57 | |     CanUseRectangle for Rectangle {
+58 | |         AreaCalculatorComponent,
+59 | |     }
+60 | | }
+   | |_^ required by this bound in `CanUseRectangle`
+   = note: the full name for the type has been written to '/home/soares/development/cgp-error-improvement/examples/target/debug/deps/cgp_error_messages_example-efe67a582b6d757e.long-type-11438302601630223989.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+   = note: this error originates in the derive macro `HasField` which comes from the expansion of the macro `check_components` (in Nightly builds, run with -Z macro-backtrace for more info)
+
