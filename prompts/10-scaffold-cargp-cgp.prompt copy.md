@@ -7,5 +7,3 @@ When calling `cargo check`, cargo-cgp should pass on an additional `--message-fo
 Cargo-cgp should parse the JSON output from `cargo check`, and format it as human-readable output back to the user. 
 
 Initially, we will not perform any processing on the output, including error messages. Instead, the main focus is to ensure that we can run `cargo cgp check` and get back the same output as `cargo check`.
-
-You don't need to write any test for now. But ensure that the code compiles through every step of your development.

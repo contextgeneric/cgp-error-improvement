@@ -3,6 +3,7 @@ use std::io::BufReader;
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
+use cargo_cgp::render::render_message;
 use cargo_metadata::Message;
 
 fn main() -> Result<()> {
@@ -60,37 +61,4 @@ fn run_check() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn render_message(message: &Message) {
-    match message {
-        Message::CompilerMessage(msg) => {
-            // Use the rendered field which contains the formatted diagnostic
-            if let Some(rendered) = &msg.message.rendered {
-                print!("{}", rendered);
-            }
-        }
-        Message::CompilerArtifact(artifact) => {
-            // For now, we'll show the compilation progress
-            // Format similar to cargo's output
-            let target_name = &artifact.target.name;
-            let verb = if artifact.fresh { "Fresh" } else { "Compiling" };
-            eprintln!("    {:>12} {}", verb, target_name);
-        }
-        Message::BuildScriptExecuted(_) => {
-            // Silently skip build script notifications for now
-        }
-        Message::BuildFinished(finished) => {
-            if !finished.success {
-                eprintln!("Build failed");
-            }
-        }
-        Message::TextLine(line) => {
-            // Pass through any non-JSON text lines
-            println!("{}", line);
-        }
-        _ => {
-            // Ignore any other message types (Message is non-exhaustive)
-        }
-    }
 }
