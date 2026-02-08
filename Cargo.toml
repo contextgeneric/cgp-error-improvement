@@ -4,6 +4,7 @@ resolver = "3"
 
 members = [
     "examples",
+    "cargo-cgp",
 ]
 
 [workspace.package]

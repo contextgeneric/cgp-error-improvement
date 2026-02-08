@@ -1,5 +1,5 @@
 [package]
-name = "cgp-error-messages-example"
+name = "cargo-cgp"
 version = "0.1.0"
 rust-version    = "1.90"
 edition         = "2024"
@@ -7,6 +7,10 @@ license         = "MIT"
 repository      = "https://github.com/contextgeneric/cgp-error-improvement"
 authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
 keywords        = ["cgp"]
+
+[[bin]]
+name = "cargo-cgp"
+path = "bin/cargo_cgp.rs"
 
 [dependencies]
 cgp = { workspace = true }
