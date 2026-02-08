@@ -2,7 +2,7 @@ use std::env;
 use std::io::BufReader;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use cargo_cgp::render::render_message;
 use cargo_metadata::Message;
 
