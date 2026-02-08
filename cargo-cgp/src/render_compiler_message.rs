@@ -510,6 +510,7 @@ fn level_to_string(level: &DiagnosticLevel) -> &'static str {
 mod tests {
     use super::*;
     use cargo_metadata::Message;
+    use insta::assert_snapshot;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -555,9 +556,28 @@ mod tests {
 
                         println!("\n=== Improved CGP Error ===");
                         match render_compiler_message(&compiler_msg) {
-                            Ok(improved) => println!("{}", improved),
+                            Ok(improved) => {
+                                println!("{}", improved);
+
+                                assert_snapshot!(improved, @r###"
+error[E0277]: missing field `height` required by CGP component
+  --> examples/src/base_area.rs:41:9
+   |
+  41 |         AreaCalculatorComponent,
+     |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+   = help: struct `Rectangle` is missing the field `height`
+   = note: this field is required by the trait bound `HasRectangleFields`
+   = note: delegation chain:
+           - required for `Rectangle` to implement `HasRectangleFields`
+           - required for `RectangleArea` to implement the provider trait `AreaCalculator`
+           - required for `Rectangle` to implement the consumer trait for `AreaCalculatorComponent`
+   = help: add `pub height: f64` to the `Rectangle` struct definition
+                                "###);
+                            },
                             Err(e) => println!("Error rendering: {}", e),
                         }
+
                     }
                 }
                 Message::TextLine(line) => {
