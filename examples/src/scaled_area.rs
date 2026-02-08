@@ -14,7 +14,7 @@ pub trait HasRectangleFields {
 
 #[cgp_impl(new RectangleArea)]
 impl AreaCalculator
-where 
+where
     Self: HasRectangleFields,
 {
     fn area(&self) -> f64 {

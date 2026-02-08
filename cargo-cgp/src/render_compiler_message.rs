@@ -98,26 +98,44 @@ fn render_cgp_error(diagnostic: &Diagnostic) -> Result<String, Error> {
         }
 
         output.push_str("   |\n");
-        output.push_str(&format!(
-            "   = help: struct `{}` is missing the field `{}`\n",
-            field_info.struct_name, field_info.field_name
-        ));
+
+        // Build help message for missing field
+        let has_other_hasfield_impls = has_other_hasfield_implementations(diagnostic);
+        if has_other_hasfield_impls {
+            output.push_str(&format!(
+                "   = help: struct `{}` is missing the field `{}`\n",
+                field_info.struct_name, field_info.field_name
+            ));
+        } else {
+            output.push_str(&format!(
+                "   = help: struct `{}` is either missing the field `{}` or needs `#[derive(HasField)]`\n",
+                field_info.struct_name, field_info.field_name
+            ));
+        }
+
         output.push_str(&format!(
             "   = note: this field is required by the trait bound `{}`\n",
             field_info.required_trait
         ));
 
-        // Show the delegation chain in a simplified form
+        // Show the delegation chain in a simplified form with deduplication
         output.push_str("   = note: delegation chain:\n");
-        for note in extract_delegation_chain(diagnostic) {
+        for note in extract_and_deduplicate_delegation_chain(diagnostic) {
             output.push_str(&format!("           - {}\n", note));
         }
 
         // Suggest a fix
-        output.push_str(&format!(
-            "   = help: add `pub {}: f64` to the `{}` struct definition\n",
-            field_info.field_name, field_info.struct_name
-        ));
+        if has_other_hasfield_impls {
+            output.push_str(&format!(
+                "   = help: add `pub {}: f64` to the `{}` struct definition\n",
+                field_info.field_name, field_info.struct_name
+            ));
+        } else {
+            output.push_str(&format!(
+                "   = help: add `pub {}: f64` to the `{}` struct definition or add `#[derive(HasField)]` if missing\n",
+                field_info.field_name, field_info.struct_name
+            ));
+        }
     } else {
         // Fallback: if we can't identify the root cause, show the original error
         // but with improved formatting
@@ -304,16 +322,134 @@ fn extract_required_trait(diagnostic: &Diagnostic) -> String {
     "HasField".to_string() // default
 }
 
-/// Extracts the delegation chain from diagnostic notes
-fn extract_delegation_chain(diagnostic: &Diagnostic) -> Vec<String> {
-    let mut chain = Vec::new();
+/// Checks if the diagnostic has help messages indicating the type implements HasField for other fields
+fn has_other_hasfield_implementations(diagnostic: &Diagnostic) -> bool {
+    for child in &diagnostic.children {
+        if matches!(child.level, DiagnosticLevel::Help) {
+            if child.message.contains("but trait `HasField")
+                || child
+                    .message
+                    .contains("the following other types implement trait `cgp::prelude::HasField")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
 
+/// Extracts provider information from IsProviderFor messages
+#[derive(Debug, Clone, PartialEq)]
+struct ProviderInfo {
+    provider_type: String,
+    component: String,
+    context: String,
+}
+
+/// Parses a provider info from an IsProviderFor note
+fn parse_provider_info(message: &str) -> Option<ProviderInfo> {
+    // Look for pattern like "for `X` to implement `IsProviderFor<Component, Context>`"
+    if !message.contains("IsProviderFor") {
+        return None;
+    }
+
+    // Extract provider type
+    let provider_type = if let Some(start) = message.find("for `") {
+        let after = &message[start + 5..];
+        if let Some(end) = after.find('`') {
+            after[..end].to_string()
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    // Extract component and context from IsProviderFor<Component, Context>
+    if let Some(start) = message.find("IsProviderFor<") {
+        let after = &message[start + 14..];
+        if let Some(comma) = after.find(',') {
+            let component = after[..comma].trim().to_string();
+
+            // Extract context (everything after the comma until the closing >)
+            let after_comma = &after[comma + 1..];
+            let mut bracket_count = 1;
+            let mut end_pos = 0;
+
+            for (i, ch) in after_comma.char_indices() {
+                if ch == '<' {
+                    bracket_count += 1;
+                } else if ch == '>' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 {
+                        end_pos = i;
+                        break;
+                    }
+                }
+            }
+
+            let context = after_comma[..end_pos].trim().to_string();
+
+            return Some(ProviderInfo {
+                provider_type,
+                component,
+                context,
+            });
+        }
+    }
+
+    None
+}
+
+/// Extracts the delegation chain from diagnostic notes with deduplication
+fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut provider_infos: Vec<ProviderInfo> = Vec::new();
+
+    // First pass: collect all notes and parse provider info
     for child in &diagnostic.children {
         if matches!(child.level, DiagnosticLevel::Note) {
             let message = &child.message;
 
             // Look for "required for X to implement Y" patterns
             if message.contains("required for") && message.contains("to implement") {
+                // Try to parse provider info
+                if let Some(provider_info) = parse_provider_info(message) {
+                    provider_infos.push(provider_info);
+                }
+            }
+        }
+    }
+
+    // Second pass: build deduplicated chain
+    for child in &diagnostic.children {
+        if matches!(child.level, DiagnosticLevel::Note) {
+            let message = &child.message;
+
+            if message.contains("required for") && message.contains("to implement") {
+                // Check if this is a redundant provider mention
+                if let Some(current_provider) = parse_provider_info(message) {
+                    // Check if there's another provider in the chain that wraps this one
+                    // with the same component and context
+                    let is_redundant = provider_infos.iter().any(|other| {
+                        if other == &current_provider {
+                            return false; // Don't compare with itself
+                        }
+
+                        // Check if the other provider contains the current provider as a generic parameter
+                        // and both have the same component and context
+                        other.component == current_provider.component
+                            && other.context == current_provider.context
+                            && other
+                                .provider_type
+                                .contains(&current_provider.provider_type)
+                    });
+
+                    if is_redundant {
+                        continue; // Skip this redundant entry
+                    }
+                }
+
                 // Simplify the message and hide internal CGP implementation details
                 let simplified = simplify_delegation_message(message);
                 chain.push(simplified);
@@ -514,22 +650,25 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
 
-    #[test]
-    fn test_base_area_error() {
+    /// Helper function to run a CGP error test from a JSON file
+    fn test_cgp_error_from_json(json_filename: &str, test_name: &str) -> Vec<String> {
         // Read the JSON fixture (newline-delimited JSON)
-        let json_path = concat!(
+        let json_path = format!(
+            "{}/../examples/src/{}",
             env!("CARGO_MANIFEST_DIR"),
-            "/../examples/src/base_area.json"
+            json_filename
         );
 
+        println!("\n=== Testing {} ===", test_name);
         println!("Reading JSON from: {}", json_path);
-        let file = File::open(json_path).expect("Failed to open base_area.json");
+        let file =
+            File::open(&json_path).unwrap_or_else(|_| panic!("Failed to open {}", json_filename));
         let reader = BufReader::new(file);
 
         let mut error_count = 0;
         let mut compiler_message_count = 0;
         let mut total_messages = 0;
-        let mut text_line_count = 0;
+        let mut output_lines = Vec::new();
 
         // Parse the stream of JSON messages
         for message_result in Message::parse_stream(reader) {
@@ -539,27 +678,56 @@ mod tests {
             match &message {
                 Message::CompilerMessage(compiler_msg) => {
                     compiler_message_count += 1;
-                    println!(
-                        "Found compiler message #{}, level: {:?}, message: {}",
-                        compiler_message_count,
-                        compiler_msg.message.level,
-                        &compiler_msg.message.message[..compiler_msg.message.message.len().min(80)]
-                    );
 
-                    // Process all diagnostic levels for debugging
+                    // Process error-level diagnostics
                     if matches!(compiler_msg.message.level, DiagnosticLevel::Error) {
                         error_count += 1;
-                        println!("\n=== Original Error ===");
+
+                        println!("\n=== Original Error #{} ===", error_count);
                         if let Some(rendered) = &compiler_msg.message.rendered {
                             println!("{}", rendered);
                         }
 
-                        println!("\n=== Improved CGP Error ===");
+                        println!("\n=== Improved CGP Error #{} ===", error_count);
                         match render_compiler_message(&compiler_msg) {
                             Ok(improved) => {
                                 println!("{}", improved);
+                                output_lines.push(improved);
+                            }
+                            Err(e) => {
+                                println!("Error rendering: {}", e);
+                                panic!("Failed to render compiler message: {}", e);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
 
-                                assert_snapshot!(improved, @r###"
+        println!("\n=== Summary for {} ===", test_name);
+        println!("Total messages parsed: {}", total_messages);
+        println!("Compiler messages found: {}", compiler_message_count);
+        println!("Error messages found: {}", error_count);
+
+        assert!(
+            compiler_message_count > 0,
+            "Expected to find at least one compiler message in {}",
+            json_filename
+        );
+
+        // Return the output for snapshot testing
+        output_lines
+    }
+
+    #[test]
+    fn test_base_area_error() {
+        let outputs = test_cgp_error_from_json("base_area.json", "base_area");
+
+        // We expect one error message for base_area
+        assert_eq!(outputs.len(), 1, "Expected 1 error message");
+
+        assert_snapshot!(outputs[0], @r###"
 error[E0277]: missing field `height` required by CGP component
   --> examples/src/base_area.rs:41:9
    |
@@ -573,44 +741,55 @@ error[E0277]: missing field `height` required by CGP component
            - required for `RectangleArea` to implement the provider trait `AreaCalculator`
            - required for `Rectangle` to implement the consumer trait for `AreaCalculatorComponent`
    = help: add `pub height: f64` to the `Rectangle` struct definition
-                                "###);
-                            },
-                            Err(e) => println!("Error rendering: {}", e),
-                        }
+        "###);
+    }
 
-                    }
-                }
-                Message::TextLine(line) => {
-                    text_line_count += 1;
-                    if text_line_count <= 3 {
-                        println!(
-                            "TextLine #{}: {}",
-                            text_line_count,
-                            &line[..line.len().min(100)]
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
+    #[test]
+    fn test_base_area_2_error() {
+        let outputs = test_cgp_error_from_json("base_area_2.json", "base_area_2");
 
-        println!("\n=== Summary ===");
-        println!("Total messages parsed: {}", total_messages);
-        println!("Compiler messages found: {}", compiler_message_count);
-        println!("Text lines found: {}", text_line_count);
-        println!("Error messages found: {}", error_count);
+        // We expect one error message for base_area_2
+        assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
-        // Ensure we found at least one compiler message (not necessarily an error for this early test)
-        if compiler_message_count == 0 && text_line_count > 0 {
-            panic!(
-                "No compiler messages found, but {} text lines were found. JSON parsing may be failing.",
-                text_line_count
-            );
-        }
-
+        // This test case has no other HasField implementations,
+        // so the error message should suggest adding the derive
         assert!(
-            compiler_message_count > 0,
-            "Expected to find at least one compiler message in base_area.json"
+            outputs[0].contains("is either missing the field")
+                || outputs[0].contains("needs `#[derive(HasField)]`"),
+            "Expected error message to mention missing derive possibility"
+        );
+    }
+
+    #[test]
+    fn test_scaled_area_error() {
+        let outputs = test_cgp_error_from_json("scaled_area.json", "scaled_area");
+
+        // We expect two error messages for scaled_area
+        assert_eq!(outputs.len(), 2, "Expected 2 error messages");
+
+        // The second error should be about the missing height field
+        assert!(
+            outputs[1].contains("missing field `height`"),
+            "Expected second error to be about missing height field"
+        );
+
+        // The delegation chain should be deduplicated -
+        // should not redundantly mention both ScaledArea<RectangleArea> and RectangleArea
+        let delegation_chain_part = outputs[1]
+            .split("delegation chain:")
+            .nth(1)
+            .expect("Expected delegation chain section");
+
+        // Count how many times "AreaCalculator" appears in provider trait mentions
+        let area_calculator_count = delegation_chain_part
+            .matches("provider trait `AreaCalculator`")
+            .count();
+
+        // Should only mention the provider trait once (not for both ScaledArea and RectangleArea)
+        assert!(
+            area_calculator_count <= 1,
+            "Delegation chain should not redundantly mention the same provider trait multiple times. Found {} mentions.",
+            area_calculator_count
         );
     }
 }
