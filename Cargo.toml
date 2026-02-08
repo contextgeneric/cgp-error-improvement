@@ -1,0 +1,19 @@
+[workspace]
+
+resolver = "3"
+
+members = [
+    "examples",
+]
+
+[workspace.package]
+rust-version    = "1.93"
+edition         = "2024"
+license         = "MIT"
+repository      = "https://github.com/contextgeneric/cgp-examples"
+authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
+keywords        = ["cgp"]
+
+[workspace.dependencies]
+cgp                 = { version = "0.6.1" }
+cgp-error-anyhow    = { version = "0.6.1" }

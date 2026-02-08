@@ -9,4 +9,4 @@ authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
 keywords        = ["cgp"]
 
 [dependencies]
-cgp = { version = "0.6.1" }
+cgp = { workspace = true }
