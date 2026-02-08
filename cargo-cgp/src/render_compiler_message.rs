@@ -314,7 +314,7 @@ fn extract_delegation_chain(diagnostic: &Diagnostic) -> Vec<String> {
 
             // Look for "required for X to implement Y" patterns
             if message.contains("required for") && message.contains("to implement") {
-                // Simplify the message
+                // Simplify the message and hide internal CGP implementation details
                 let simplified = simplify_delegation_message(message);
                 chain.push(simplified);
             }
@@ -324,11 +324,28 @@ fn extract_delegation_chain(diagnostic: &Diagnostic) -> Vec<String> {
     chain
 }
 
-/// Simplifies delegation messages by removing verbose type information
+/// Simplifies delegation messages by removing verbose type information and hiding internal CGP traits
 fn simplify_delegation_message(message: &str) -> String {
-    // Remove module prefixes like "base_area::"
-    let mut simplified = message.replace("base_area::", "");
+    let mut simplified = message.to_string();
+
+    // Remove module prefixes FIRST, before doing trait replacements
+    // This ensures our pattern matching works correctly
+    simplified = simplified.replace("base_area::", "");
     simplified = simplified.replace("cgp::prelude::", "");
+
+    // Hide internal CGP trait `IsProviderFor` and replace with user-friendly "provider trait"
+    // Pattern: "required for `X` to implement `IsProviderFor<YComponent, Z>`"
+    // Replace with: "required for `X` to implement the provider trait `Y`"
+    if let Some(provider_replacement) = replace_is_provider_for(&simplified) {
+        simplified = provider_replacement;
+    }
+
+    // Hide internal CGP trait `CanUseComponent` and replace with user-friendly "consumer trait"
+    // Pattern: "required for `X` to implement `CanUseComponent<YComponent>`"
+    // Replace with: "required for `X` to implement the consumer trait for `YComponent`"
+    if let Some(consumer_replacement) = replace_can_use_component(&simplified) {
+        simplified = consumer_replacement;
+    }
 
     // Truncate very long type names
     if simplified.len() > 100 {
@@ -338,6 +355,142 @@ fn simplify_delegation_message(message: &str) -> String {
     }
 
     simplified
+}
+
+/// Replaces `IsProviderFor<Component, Context>` with user-friendly provider trait mention
+/// This hides the internal CGP trait and presents a more intuitive interface to users
+fn replace_is_provider_for(message: &str) -> Option<String> {
+    // Pattern: "to implement `IsProviderFor<ComponentName, ContextType>`"
+    if !message.contains("IsProviderFor") {
+        return None;
+    }
+
+    // Extract the component name from IsProviderFor<ComponentName, ...>
+    if let Some(start) = message.find("IsProviderFor<") {
+        let after_start = start + "IsProviderFor<".len();
+        if let Some(comma_pos) = message[after_start..].find(',') {
+            let component_name = message[after_start..after_start + comma_pos].trim();
+            let provider_trait_name = extract_provider_trait_name(component_name);
+
+            // Find the end of the IsProviderFor type
+            let mut bracket_count = 1;
+            let mut end_pos = after_start;
+            for (i, ch) in message[after_start..].char_indices() {
+                if ch == '<' {
+                    bracket_count += 1;
+                } else if ch == '>' {
+                    bracket_count -= 1;
+                    if bracket_count == 0 {
+                        end_pos = after_start + i + 1;
+                        break;
+                    }
+                }
+            }
+
+            // Replace the entire IsProviderFor<...> with the provider trait name
+            // The original message typically has backticks around the trait: `IsProviderFor<...>`
+            // We need to check if we're inside backticks and adjust accordingly
+            let before = &message[..start];
+            let after = &message[end_pos..];
+
+            // Check if IsProviderFor is wrapped in backticks
+            let has_opening_backtick = before.ends_with('`');
+            let has_closing_backtick = after.starts_with('`');
+
+            let replacement = if has_opening_backtick && has_closing_backtick {
+                // We're inside backticks, remove outer ones and keep inner ones
+                format!(
+                    "{}the provider trait `{}`{}",
+                    &before[..before.len() - 1], // Remove trailing backtick
+                    provider_trait_name,
+                    &after[1..]
+                ) // Remove leading backtick
+            } else {
+                // Not in backticks, add them around the provider trait name
+                format!(
+                    "{}the provider trait `{}`{}",
+                    before, provider_trait_name, after
+                )
+            };
+
+            return Some(replacement);
+        }
+    }
+
+    None
+}
+
+/// Replaces `CanUseComponent<Component>` with user-friendly consumer trait mention
+/// This hides the internal CGP trait and presents a more intuitive interface to users
+fn replace_can_use_component(message: &str) -> Option<String> {
+    // Pattern: "to implement `CanUseComponent<ComponentName>`"
+    if !message.contains("CanUseComponent") {
+        return None;
+    }
+
+    // Extract the component name from CanUseComponent<ComponentName>
+    if let Some(start) = message.find("CanUseComponent<") {
+        let after_start = start + "CanUseComponent<".len();
+
+        // Find the matching closing bracket
+        let mut bracket_count = 1;
+        let mut end_pos = after_start;
+        for (i, ch) in message[after_start..].char_indices() {
+            if ch == '<' {
+                bracket_count += 1;
+            } else if ch == '>' {
+                bracket_count -= 1;
+                if bracket_count == 0 {
+                    end_pos = after_start + i;
+                    break;
+                }
+            }
+        }
+
+        let component_name = message[after_start..end_pos].trim();
+
+        // Replace CanUseComponent<...> with "the consumer trait for `ComponentName`"
+        // The original message typically has backticks: `CanUseComponent<...>`
+        // We need to handle the backticks properly
+        let before = &message[..start];
+        let after = &message[end_pos + 1..];
+
+        // Check if CanUseComponent is wrapped in backticks
+        let has_opening_backtick = before.ends_with('`');
+        let has_closing_backtick = after.starts_with('`');
+
+        let replacement = if has_opening_backtick && has_closing_backtick {
+            // We're inside backticks, remove outer ones and keep inner ones
+            format!(
+                "{}the consumer trait for `{}`{}",
+                &before[..before.len() - 1], // Remove trailing backtick
+                component_name,
+                &after[1..]
+            ) // Remove leading backtick
+        } else {
+            // Not in backticks, add them around the component name
+            format!(
+                "{}the consumer trait for `{}`{}",
+                before, component_name, after
+            )
+        };
+
+        return Some(replacement);
+    }
+
+    None
+}
+
+/// Extracts the provider trait name from a component name
+/// Convention: ComponentName -> ProviderTrait (remove "Component" suffix)
+/// Example: "AreaCalculatorComponent" -> "AreaCalculator"
+fn extract_provider_trait_name(component_name: &str) -> String {
+    if let Some(stripped) = component_name.strip_suffix("Component") {
+        stripped.to_string()
+    } else {
+        // If no "Component" suffix, return a generic description
+        format!("the provider trait for `{}`", component_name)
+    }
 }
 
 /// Converts DiagnosticLevel to a string representation
@@ -369,7 +522,7 @@ mod tests {
         );
 
         println!("Reading JSON from: {}", json_path);
-        let file = File::open(json_path).expect("Failed to open base_area_ndjson.json");
+        let file = File::open(json_path).expect("Failed to open base_area.json");
         let reader = BufReader::new(file);
 
         let mut error_count = 0;
