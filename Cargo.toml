@@ -11,10 +11,12 @@ members = [
 rust-version    = "1.93"
 edition         = "2024"
 license         = "MIT"
-repository      = "https://github.com/contextgeneric/cgp-examples"
+repository      = "https://github.com/contextgeneric/cgp-error-improvement"
 authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
 keywords        = ["cgp"]
 
 [workspace.dependencies]
 cgp                 = { version = "0.6.1" }
 cgp-error-anyhow    = { version = "0.6.1" }
+cargo_metadata      = { version = "0.23.1" }
+anyhow              = { version = "1.0.101" }

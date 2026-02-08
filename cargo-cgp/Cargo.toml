@@ -1,16 +1,18 @@
 [package]
 name = "cargo-cgp"
 version = "0.1.0"
-rust-version    = "1.90"
-edition         = "2024"
-license         = "MIT"
-repository      = "https://github.com/contextgeneric/cgp-error-improvement"
-authors         = ["Soares Chen <soares.chen@maybevoid.com>"]
-keywords        = ["cgp"]
+edition      = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+rust-version = { workspace = true }
+keywords     = { workspace = true }
 
 [[bin]]
 name = "cargo-cgp"
 path = "bin/cargo_cgp.rs"
 
 [dependencies]
-cgp = { workspace = true }
+cgp                 = { workspace = true }
+cargo_metadata      = { workspace = true }
+anyhow              = { workspace = true }
