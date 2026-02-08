@@ -24,6 +24,8 @@ dependencies = [
  "anyhow",
  "cargo_metadata",
  "cgp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
