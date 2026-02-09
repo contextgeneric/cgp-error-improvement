@@ -83,19 +83,19 @@ fn test_base_area_error() {
     assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
     assert_snapshot!(outputs[0], @"
-    error[E0277]: missing field `height` required by CGP component
+    error[E0277]: missing field `heigt` (possibly incomplete) required by CGP component
       --> examples/src/base_area.rs:41:9
        |
       41 |         AreaCalculatorComponent,
          |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
        |
-       = help: struct `Rectangle` is missing the field `height`
-       = note: this field is required by the trait bound `HasRectangleFields`
+       = help: struct `Rectangle` is missing the field `heigt`
+       = note: this field is required by the trait bound `CanUseRectangle`
        = note: delegation chain:
                - required for `Rectangle` to implement `HasRectangleFields`
                - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-               - required for `Rectangle` to implement the consumer trait `CanUseRectangle`
-       = help: add `pub height: f64` to the `Rectangle` struct definition
+               - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+       = help: add `pub heigt: <type>` to the `Rectangle` struct definition
     ");
 }
 
@@ -122,12 +122,12 @@ fn test_base_area_2_error() {
          |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
        |
        = help: struct `Rectangle` is either missing the field `width` or needs `#[derive(HasField)]`
-       = note: this field is required by the trait bound `HasRectangleFields`
+       = note: this field is required by the trait bound `CanUseRectangle`
        = note: delegation chain:
                - required for `Rectangle` to implement `HasRectangleFields`
                - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-               - required for `Rectangle` to implement the consumer trait `CanUseRectangle`
-       = help: add `pub width: f64` to the `Rectangle` struct definition or add `#[derive(HasField)]` if missing
+               - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+       = help: add `pub width: <type>` to the `Rectangle` struct definition or add `#[derive(HasField)]` if missing
     ");
 }
 
@@ -170,7 +170,6 @@ fn test_scaled_area_error() {
         area_calculator_count
     );
 
-
     assert_snapshot!(outputs[1], @"
     error[E0277]: missing field `height` required by CGP component
       --> examples/src/scaled_area.rs:58:9
@@ -179,11 +178,11 @@ fn test_scaled_area_error() {
          |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
        |
        = help: struct `Rectangle` is missing the field `height`
-       = note: this field is required by the trait bound `HasRectangleFields`
+       = note: this field is required by the trait bound `CanUseRectangle`
        = note: delegation chain:
                - required for `Rectangle` to implement `HasRectangleFields`
                - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-               - required for `Rectangle` to implement the consumer trait `CanUseRectangle`
-       = help: add `pub height: f64` to the `Rectangle` struct definition
+               - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+       = help: add `pub height: <type>` to the `Rectangle` struct definition
     ");
 }

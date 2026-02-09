@@ -18,6 +18,10 @@ The code base currently handles the merging of errors poorly, by skipping the fi
 
 Have a deep study through the report in `10-combined-report.report.md`, and compare the proposal to the organization in the current code base. Come up with a plan on how to refactor and improve the code base, by using appropriate suggestions from the report. Do not introduce any new features, and only focus on improving the current code.
 
+## Testing
+
+You should run existing unit tests and check if there is any change in output. If the output has changed, ensure that the error messages for existing test cases do not get worse. After your changes are finalized, update the relevant `assert_snapshot` using the appropriate `cargo insta` command.
+
 ## Planning
 
 Before you start, write a detailed plan on the changes you are going to make in your response.
