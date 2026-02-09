@@ -28,12 +28,16 @@ fn main() -> Result<()> {
 }
 
 fn run_check() -> Result<()> {
+    // Get any additional arguments to pass through to cargo
+    let args: Vec<String> = env::args().skip(3).collect();
+
     // Spawn cargo check with JSON output
     let mut child = Command::new("cargo")
         .arg("check")
         .arg("--message-format=json")
+        .args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::piped()) // Capture stderr to prevent progress bar interference
         .spawn()
         .context("Failed to spawn cargo check")?;
 

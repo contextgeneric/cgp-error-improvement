@@ -47,7 +47,7 @@ Additionally, also make the following improvements to the code:
     - We may be able to gain more certainty from the additional `help` message from the compiler that says "but trait `HasField<...>` is implemented for it". This indicates that the context has other implementations of `HasFields`, so the cause is likely a missing field instead of a missing `#[derive(HasField)]`.
 - Refactor the existing unit tests so that the test logic can be reused by new tests like the one you are going to add.
 
-To test the implementation, you should write a unit test that reads directly from the relevant .json files, parse it and calls `render_compiler_message`, and then print the output using `println!`. You should then run the test using `cargo test -p cargo-cgp -- --nocapture` with the specific test name to check the output of the improved error message.
+To test the implementation, you should write or edit a unit test that reads directly from the relevant .json files, parse it and calls `render_compiler_message`, and then print the output using `println!`. You should then run the test using `cargo test -p cargo-cgp -- --nocapture` with the specific test name to check the output of the improved error message.
 
 You should also test running `cargo-cgp` against `scaled_area.rs` by running `target/debug/cargo-cgp cgp check`. Ensure that the output is really improved, such as all CGP error messages are formatted properly, and that there is no more dangling output from the previous line.
 

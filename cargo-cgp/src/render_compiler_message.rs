@@ -44,6 +44,16 @@ fn is_cgp_error(diagnostic: &Diagnostic) -> bool {
         }
     }
 
+    // Check if this is a provider trait error by looking for:
+    // "required for X to implement IsProviderFor" in child notes
+    for child in &diagnostic.children {
+        if matches!(child.level, DiagnosticLevel::Note | DiagnosticLevel::Help) {
+            if child.message.contains("IsProviderFor") {
+                return true;
+            }
+        }
+    }
+
     false
 }
 
@@ -438,11 +448,26 @@ fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic) -> Vec<Stri
 
                         // Check if the other provider contains the current provider as a generic parameter
                         // and both have the same component and context
+                        // The provider_type should contain the inner provider as a type parameter
+                        // e.g., "ScaledArea<RectangleArea>" contains "RectangleArea"
+                        let contains_as_type_param = other
+                            .provider_type
+                            .contains(&format!("<{}", current_provider.provider_type))
+                            || other
+                                .provider_type
+                                .contains(&format!("<{},", current_provider.provider_type))
+                            || other
+                                .provider_type
+                                .contains(&format!(", {}", current_provider.provider_type))
+                            || other
+                                .provider_type
+                                .contains(&format!(" {}", current_provider.provider_type))
+                            || other.provider_type
+                                == format!("{}>", current_provider.provider_type);
+
                         other.component == current_provider.component
                             && other.context == current_provider.context
-                            && other
-                                .provider_type
-                                .contains(&current_provider.provider_type)
+                            && contains_as_type_param
                     });
 
                     if is_redundant {
@@ -766,6 +791,16 @@ error[E0277]: missing field `height` required by CGP component
 
         // We expect two error messages for scaled_area
         assert_eq!(outputs.len(), 2, "Expected 2 error messages");
+
+        // Both errors should be CGP-formatted (not falling back to original)
+        for (i, output) in outputs.iter().enumerate() {
+            assert!(
+                output.contains("missing field `height`")
+                    || output.starts_with("error[E0277]: the trait bound"),
+                "Error {} should be either CGP-formatted or about provider trait",
+                i + 1
+            );
+        }
 
         // The second error should be about the missing height field
         assert!(

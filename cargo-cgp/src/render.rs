@@ -25,9 +25,9 @@ pub fn render_message(message: &Message) {
                 eprintln!("Build failed");
             }
         }
-        Message::TextLine(line) => {
-            // Pass through any non-JSON text lines
-            println!("{}", line);
+        Message::TextLine(_) => {
+            // Suppress text lines as they may contain fragments from Cargo's output
+            // that interfere with our formatted error messages
         }
         _ => {
             // Ignore any other message types (Message is non-exhaustive)
