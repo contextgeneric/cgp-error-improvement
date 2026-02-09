@@ -280,26 +280,21 @@ impl DiagnosticDatabase {
         let mut keys_to_suppress = Vec::new();
 
         for (key, entry) in &self.entries {
-            // Suppress errors that are less informative transitive failures
-            // An error should be suppressed if:
-            // 1. It doesn't have field info (not a root cause)
-            // 2. It doesn't have meaningful delegation information
-            // 3. The error message is generic (about trait bounds without specifics)
+            // An error should be suppressed only if:
+            // 1. There's another entry at the same location with field info (more specific)
+            // 2. And this entry has no meaningful information beyond generic trait bounds
 
-            if entry.field_info.is_none() && !entry.is_root_cause {
-                // Check if this looks like a generic trait bound error without useful details
-                let has_useful_info =
-                    !entry.delegation_notes.is_empty() || entry.provider_relationships.len() > 0;
-
-                // If it doesn't have useful delegation info beyond generic trait bounds, suppress it
-                if !has_useful_info || is_generic_trait_bound_error(&entry.message) {
-                    keys_to_suppress.push(key.clone());
-                    continue;
-                }
-
-                // Also check if there's another entry at the same location with field info
+            // Check if there's another entry at the same location with field info
+            if entry.field_info.is_none() {
                 if let Some(_related_key) = self.find_related_with_field_info(key) {
-                    keys_to_suppress.push(key.clone());
+                    // There's a more specific error at the same location
+                    // Suppress this one only if it doesn't have additional useful info
+                    let has_useful_delegation_info = !entry.delegation_notes.is_empty()
+                        || !entry.provider_relationships.is_empty();
+
+                    if !has_useful_delegation_info {
+                        keys_to_suppress.push(key.clone());
+                    }
                 }
             }
         }
@@ -334,24 +329,6 @@ impl DiagnosticDatabase {
     pub fn get_all_entries(&self) -> Vec<&DiagnosticEntry> {
         self.entries.values().collect()
     }
-}
-
-/// Checks if an error message is a generic trait bound error without specific details
-fn is_generic_trait_bound_error(message: &str) -> bool {
-    // Generic trait bound errors typically say "X: Trait is not satisfied"
-    // without providing specific details about why
-    // These are usually transitive failures that add noise
-
-    // If it mentions a trait bound without field-specific info, it's likely transitive
-    if message.contains("is not satisfied") {
-        // Check if it's about a trait implementation without HasField specifics
-        if !message.contains("HasField") {
-            // This looks like a generic trait bound error (provider/consumer traits)
-            return true;
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

@@ -232,8 +232,9 @@ fn extract_chars_from_pattern(text: &str) -> Vec<char> {
             // Look for the character after the quote
             let char_start = idx + 7;
             if let Some(ch) = text[char_start..].chars().next() {
-                // Skip underscore placeholders (used for hidden characters)
-                if ch != '\'' && ch != '_' && ch.is_alphabetic() {
+                // Extract the character if it's not the closing quote
+                // Underscores are valid field name characters and should be included
+                if ch != '\'' {
                     chars.push(ch);
                 }
             }
@@ -416,7 +417,7 @@ mod tests {
 
         let text2 = "Chars<'w', Chars<'i', Chars<'d', Chars<'_', Chars<'h', Nil>>>>>";
         let chars2 = extract_chars_from_pattern(text2);
-        // Underscores are placeholders and should be skipped
-        assert_eq!(chars2, vec!['w', 'i', 'd', 'h']);
+        // Underscores are valid field name characters
+        assert_eq!(chars2, vec!['w', 'i', 'd', '_', 'h']);
     }
 }

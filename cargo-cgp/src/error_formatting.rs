@@ -73,13 +73,17 @@ fn format_missing_field_error(
 
     // Help message
     if entry.has_other_hasfield_impls {
+        // The struct has derived HasField (we can see other field implementations)
+        // So the field is truly missing
         output.push_str(&format!(
-            "   = help: struct `{}` is missing the field `{}`\n",
+            "   = help: the struct `{}` is missing the required field `{}`\n",
             field_info.target_type, field_info.field_name
         ));
     } else {
+        // The struct has no HasField implementations visible
+        // Either the field is missing OR the struct needs #[derive(HasField)]
         output.push_str(&format!(
-            "   = help: struct `{}` is either missing the field `{}` or needs `#[derive(HasField)]`\n",
+            "   = help: the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`\n",
             field_info.target_type, field_info.field_name
         ));
     }
@@ -107,12 +111,12 @@ fn format_missing_field_error(
     // Suggest fixes
     if entry.has_other_hasfield_impls {
         output.push_str(&format!(
-            "   = help: add `pub {}: <type>` to the `{}` struct definition\n",
+            "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct\n",
             field_info.field_name, field_info.target_type
         ));
     } else {
         output.push_str(&format!(
-            "   = help: add `pub {}: <type>` to the `{}` struct definition or add `#[derive(HasField)]` if missing\n",
+            "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive\n",
             field_info.field_name, field_info.target_type
         ));
     }
