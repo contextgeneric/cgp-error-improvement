@@ -135,6 +135,8 @@ fn test_base_area_2_error() {
 fn test_scaled_area_error() {
     let outputs = test_cgp_error_from_json("scaled_area.json", "scaled_area");
 
+    // FIXME: the two source errors should be merged into one output.
+
     // We expect two error messages, but the first one should be suppressed (empty)
     // because it's a provider trait error that will be followed by a more detailed error
     assert_eq!(outputs.len(), 2, "Expected 2 error messages");
@@ -184,5 +186,29 @@ fn test_scaled_area_error() {
                - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
                - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
        = help: add `pub height: <type>` to the `Rectangle` struct definition
+    ");
+}
+
+
+#[test]
+fn test_scaled_area_2_error() {
+    let outputs = test_cgp_error_from_json("scaled_area_2.json", "scaled_area_2");
+
+    assert_eq!(outputs.len(), 1, "Expected 1 error message");
+
+    assert_snapshot!(outputs[0], @"
+    error[E0277]: missing field `scalefactor` (possibly incomplete) required by CGP component
+      --> examples/src/scaled_area_2.rs:58:9
+       |
+      58 |         AreaCalculatorComponent,
+         |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+       |
+       = help: struct `Rectangle` is missing the field `scalefactor`
+       = note: this field is required by the trait bound `CanUseRectangle`
+       = note: delegation chain:
+               - required for `Rectangle` to implement `HasScaleFactor`
+               - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+               - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+       = help: add `pub scalefactor: <type>` to the `Rectangle` struct definition
     ");
 }
