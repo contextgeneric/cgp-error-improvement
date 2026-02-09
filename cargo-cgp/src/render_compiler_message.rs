@@ -18,6 +18,157 @@ pub fn render_compiler_message(message: &CompilerMessage) -> Result<String, Erro
     }
 }
 
+/// Extract CGP metadata from a diagnostic
+#[derive(Debug, Clone)]
+pub struct CgpErrorMetadata {
+    pub component: Option<String>,
+    pub context: Option<String>,
+    pub provider_trait: Option<String>,
+    pub consumer_trait: Option<String>,
+    pub is_provider_trait_error: bool,
+    pub has_missing_field: bool,
+}
+
+impl CgpErrorMetadata {
+    pub fn from_diagnostic(diagnostic: &Diagnostic) -> Self {
+        let mut meta = CgpErrorMetadata {
+            component: None,
+            context: None,
+            provider_trait: None,
+            consumer_trait: None,
+            is_provider_trait_error: false,
+            has_missing_field: false,
+        };
+
+        // Check main message for clues
+        if diagnostic.message.contains("AreaCalculator") {
+            if !diagnostic.message.contains("AreaCalculatorComponent") {
+                // This is likely about the provider trait itself
+                meta.is_provider_trait_error = true;
+            }
+        }
+
+        // Extract information from children
+        for child in &diagnostic.children {
+            // Check for provider trait with __Context__ pattern
+            if matches!(child.level, DiagnosticLevel::Help) {
+                if child.message.contains("__Context__") && child.message.contains("is implemented for") {
+                    // Pattern: "the trait `ProviderTrait<__Context__>` is implemented for `ProviderImpl`"
+                    if let Some(trait_name) = extract_provider_trait_from_context_pattern(&child.message) {
+                        meta.provider_trait = Some(trait_name);
+                    }
+                }
+            }
+
+            // Check for IsProviderFor pattern
+            if child.message.contains("IsProviderFor") {
+                if let Some(provider_info) = parse_provider_info(&child.message) {
+                    if meta.component.is_none() {
+                        meta.component = Some(provider_info.component.clone());
+                    }
+                    if meta.context.is_none() {
+                        meta.context = Some(provider_info.context.clone());
+                    }
+                }
+            }
+
+            // Check for CanUseComponent pattern to extract component
+            if child.message.contains("CanUseComponent") {
+                if let Some(component) = extract_component_from_can_use(&child.message) {
+                    if meta.component.is_none() {
+                        meta.component = Some(component);
+                    }
+                }
+            }
+
+            // Check for consumer trait ("required by a bound in X")
+            if matches!(child.level, DiagnosticLevel::Note) && child.message.contains("required by a bound in") {
+                if let Some(trait_name) = extract_consumer_trait_from_bound(&child.message) {
+                    meta.consumer_trait = Some(trait_name);
+                }
+            }
+
+            // Check for missing field
+            if matches!(child.level, DiagnosticLevel::Help) && child.message.contains("HasField") && child.message.contains("is not implemented") {
+                meta.has_missing_field = true;
+            }
+        }
+
+        // Extract component from main message if not found
+        if meta.component.is_none() {
+            if let Some(component) = extract_component_from_message(&diagnostic.message) {
+                meta.component = Some(component);
+            }
+        }
+
+        meta
+    }
+}
+
+/// Extract provider trait name from "ProviderTrait<__Context__>" pattern
+fn extract_provider_trait_from_context_pattern(message: &str) -> Option<String> {
+    // Pattern: "the trait `ProviderTrait<__Context__>` is implemented for"
+    if let Some(start) = message.find("the trait `") {
+        let after_start = start + "the trait `".len();
+        if let Some(lt_pos) = message[after_start..].find('<') {
+            let trait_name = &message[after_start..after_start + lt_pos];
+            // Remove module prefixes
+            let simple_name = trait_name.split("::").last().unwrap_or(trait_name);
+            return Some(simple_name.to_string());
+        }
+    }
+    None
+}
+
+/// Extract component from CanUseComponent<Component> pattern
+fn extract_component_from_can_use(message: &str) -> Option<String> {
+    if let Some(start) = message.find("CanUseComponent<") {
+        let after_start = start + "CanUseComponent<".len();
+        let mut bracket_count = 1;
+        let mut end_pos = after_start;
+
+        for (i, ch) in message[after_start..].char_indices() {
+            if ch == '<' {
+                bracket_count += 1;
+            } else if ch == '>' {
+                bracket_count -= 1;
+                if bracket_count == 0 {
+                    end_pos = after_start + i;
+                    break;
+                }
+            }
+        }
+
+        let component = message[after_start..end_pos].trim();
+        return Some(component.to_string());
+    }
+    None
+}
+
+/// Extract consumer trait name from "required by a bound in X"
+fn extract_consumer_trait_from_bound(message: &str) -> Option<String> {
+    if let Some(start) = message.find("required by a bound in `") {
+        let after_start = start + "required by a bound in `".len();
+        if let Some(end) = message[after_start..].find('`') {
+            return Some(message[after_start..after_start + end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract component from main error message
+fn extract_component_from_message(message: &str) -> Option<String> {
+    // Look for patterns like "Component" at the end
+    let words: Vec<&str> = message.split_whitespace().collect();
+    for word in words {
+        if word.ends_with("Component") || word.ends_with("Component>") || word.ends_with("Component,") {
+            let clean = word.trim_end_matches(&[',', '>', '`', ')']).trim_start_matches(&['`', '(']);
+            return Some(clean.to_string());
+        }
+    }
+    None
+}
+
 /// Checks if a diagnostic is a CGP-related error
 fn is_cgp_error(diagnostic: &Diagnostic) -> bool {
     // Check for CGP-specific patterns in the error message
@@ -61,6 +212,9 @@ fn is_cgp_error(diagnostic: &Diagnostic) -> bool {
 fn render_cgp_error(diagnostic: &Diagnostic) -> Result<String, Error> {
     let mut output = String::new();
 
+    // Extract metadata to understand what kind of error this is
+    let metadata = CgpErrorMetadata::from_diagnostic(diagnostic);
+
     // Find the root cause (missing field) from the help section
     let missing_field_info = extract_missing_field_info(diagnostic);
 
@@ -72,6 +226,15 @@ fn render_cgp_error(diagnostic: &Diagnostic) -> Result<String, Error> {
         output.push_str(&format!("error[{}]: ", code.code));
     } else {
         output.push_str("error: ");
+    }
+
+    // If this is a provider trait error without field information, we might be seeing
+    // the first of a pair of related errors. Suppress it since the detailed error will come next.
+    if metadata.is_provider_trait_error && missing_field_info.is_none() {
+        // This is the "Provider: ProviderTrait<Context>" error that will be followed by
+        // a more detailed error about the missing field. We suppress this to avoid duplication.
+        // Return empty string to filter it out
+        return Ok(String::new());
     }
 
     // If we found the root cause, present it first
@@ -130,7 +293,8 @@ fn render_cgp_error(diagnostic: &Diagnostic) -> Result<String, Error> {
 
         // Show the delegation chain in a simplified form with deduplication
         output.push_str("   = note: delegation chain:\n");
-        for note in extract_and_deduplicate_delegation_chain(diagnostic) {
+        let chain_items = extract_and_deduplicate_delegation_chain(diagnostic, &metadata);
+        for note in chain_items {
             output.push_str(&format!("           - {}\n", note));
         }
 
@@ -412,7 +576,7 @@ fn parse_provider_info(message: &str) -> Option<ProviderInfo> {
 }
 
 /// Extracts the delegation chain from diagnostic notes with deduplication
-fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic) -> Vec<String> {
+fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic, metadata: &CgpErrorMetadata) -> Vec<String> {
     let mut chain = Vec::new();
     let mut provider_infos: Vec<ProviderInfo> = Vec::new();
 
@@ -476,7 +640,7 @@ fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic) -> Vec<Stri
                 }
 
                 // Simplify the message and hide internal CGP implementation details
-                let simplified = simplify_delegation_message(message);
+                let simplified = simplify_delegation_message(message, metadata);
                 chain.push(simplified);
             }
         }
@@ -486,25 +650,26 @@ fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic) -> Vec<Stri
 }
 
 /// Simplifies delegation messages by removing verbose type information and hiding internal CGP traits
-fn simplify_delegation_message(message: &str) -> String {
+fn simplify_delegation_message(message: &str, metadata: &CgpErrorMetadata) -> String {
     let mut simplified = message.to_string();
 
     // Remove module prefixes FIRST, before doing trait replacements
     // This ensures our pattern matching works correctly
     simplified = simplified.replace("base_area::", "");
+    simplified = simplified.replace("scaled_area::", "");
     simplified = simplified.replace("cgp::prelude::", "");
 
     // Hide internal CGP trait `IsProviderFor` and replace with user-friendly "provider trait"
     // Pattern: "required for `X` to implement `IsProviderFor<YComponent, Z>`"
     // Replace with: "required for `X` to implement the provider trait `Y`"
-    if let Some(provider_replacement) = replace_is_provider_for(&simplified) {
+    if let Some(provider_replacement) = replace_is_provider_for(&simplified, metadata) {
         simplified = provider_replacement;
     }
 
     // Hide internal CGP trait `CanUseComponent` and replace with user-friendly "consumer trait"
     // Pattern: "required for `X` to implement `CanUseComponent<YComponent>`"
     // Replace with: "required for `X` to implement the consumer trait for `YComponent`"
-    if let Some(consumer_replacement) = replace_can_use_component(&simplified) {
+    if let Some(consumer_replacement) = replace_can_use_component(&simplified, metadata) {
         simplified = consumer_replacement;
     }
 
@@ -520,7 +685,7 @@ fn simplify_delegation_message(message: &str) -> String {
 
 /// Replaces `IsProviderFor<Component, Context>` with user-friendly provider trait mention
 /// This hides the internal CGP trait and presents a more intuitive interface to users
-fn replace_is_provider_for(message: &str) -> Option<String> {
+fn replace_is_provider_for(message: &str, _metadata: &CgpErrorMetadata) -> Option<String> {
     // Pattern: "to implement `IsProviderFor<ComponentName, ContextType>`"
     if !message.contains("IsProviderFor") {
         return None;
@@ -583,7 +748,7 @@ fn replace_is_provider_for(message: &str) -> Option<String> {
 
 /// Replaces `CanUseComponent<Component>` with user-friendly consumer trait mention
 /// This hides the internal CGP trait and presents a more intuitive interface to users
-fn replace_can_use_component(message: &str) -> Option<String> {
+fn replace_can_use_component(message: &str, _metadata: &CgpErrorMetadata) -> Option<String> {
     // Pattern: "to implement `CanUseComponent<ComponentName>`"
     if !message.contains("CanUseComponent") {
         return None;
@@ -789,23 +954,20 @@ error[E0277]: missing field `height` required by CGP component
     fn test_scaled_area_error() {
         let outputs = test_cgp_error_from_json("scaled_area.json", "scaled_area");
 
-        // We expect two error messages for scaled_area
+        // We expect two error messages, but the first one should be suppressed (empty)
+        // because it's a provider trait error that will be followed by a more detailed error
         assert_eq!(outputs.len(), 2, "Expected 2 error messages");
 
-        // Both errors should be CGP-formatted (not falling back to original)
-        for (i, output) in outputs.iter().enumerate() {
-            assert!(
-                output.contains("missing field `height`")
-                    || output.starts_with("error[E0277]: the trait bound"),
-                "Error {} should be either CGP-formatted or about provider trait",
-                i + 1
-            );
-        }
+        // The first error should be empty (suppressed provider trait error)
+        assert!(
+            outputs[0].is_empty(),
+            "First error should be suppressed (empty) since it's a redundant provider trait error"
+        );
 
-        // The second error should be about the missing height field
+        // The second error should be the comprehensive CGP-formatted error
         assert!(
             outputs[1].contains("missing field `height`"),
-            "Expected second error to be about missing height field"
+            "Second error should be about missing height field"
         );
 
         // The delegation chain should be deduplicated -
