@@ -52,9 +52,13 @@ impl CgpErrorMetadata {
         for child in &diagnostic.children {
             // Check for provider trait with __Context__ pattern
             if matches!(child.level, DiagnosticLevel::Help) {
-                if child.message.contains("__Context__") && child.message.contains("is implemented for") {
+                if child.message.contains("__Context__")
+                    && child.message.contains("is implemented for")
+                {
                     // Pattern: "the trait `ProviderTrait<__Context__>` is implemented for `ProviderImpl`"
-                    if let Some(trait_name) = extract_provider_trait_from_context_pattern(&child.message) {
+                    if let Some(trait_name) =
+                        extract_provider_trait_from_context_pattern(&child.message)
+                    {
                         meta.provider_trait = Some(trait_name);
                     }
                 }
@@ -82,14 +86,19 @@ impl CgpErrorMetadata {
             }
 
             // Check for consumer trait ("required by a bound in X")
-            if matches!(child.level, DiagnosticLevel::Note) && child.message.contains("required by a bound in") {
+            if matches!(child.level, DiagnosticLevel::Note)
+                && child.message.contains("required by a bound in")
+            {
                 if let Some(trait_name) = extract_consumer_trait_from_bound(&child.message) {
                     meta.consumer_trait = Some(trait_name);
                 }
             }
 
             // Check for missing field
-            if matches!(child.level, DiagnosticLevel::Help) && child.message.contains("HasField") && child.message.contains("is not implemented") {
+            if matches!(child.level, DiagnosticLevel::Help)
+                && child.message.contains("HasField")
+                && child.message.contains("is not implemented")
+            {
                 meta.has_missing_field = true;
             }
         }
@@ -161,8 +170,13 @@ fn extract_component_from_message(message: &str) -> Option<String> {
     // Look for patterns like "Component" at the end
     let words: Vec<&str> = message.split_whitespace().collect();
     for word in words {
-        if word.ends_with("Component") || word.ends_with("Component>") || word.ends_with("Component,") {
-            let clean = word.trim_end_matches(&[',', '>', '`', ')']).trim_start_matches(&['`', '(']);
+        if word.ends_with("Component")
+            || word.ends_with("Component>")
+            || word.ends_with("Component,")
+        {
+            let clean = word
+                .trim_end_matches(&[',', '>', '`', ')'])
+                .trim_start_matches(&['`', '(']);
             return Some(clean.to_string());
         }
     }
@@ -576,7 +590,10 @@ fn parse_provider_info(message: &str) -> Option<ProviderInfo> {
 }
 
 /// Extracts the delegation chain from diagnostic notes with deduplication
-fn extract_and_deduplicate_delegation_chain(diagnostic: &Diagnostic, metadata: &CgpErrorMetadata) -> Vec<String> {
+fn extract_and_deduplicate_delegation_chain(
+    diagnostic: &Diagnostic,
+    metadata: &CgpErrorMetadata,
+) -> Vec<String> {
     let mut chain = Vec::new();
     let mut provider_infos: Vec<ProviderInfo> = Vec::new();
 
@@ -748,7 +765,7 @@ fn replace_is_provider_for(message: &str, _metadata: &CgpErrorMetadata) -> Optio
 
 /// Replaces `CanUseComponent<Component>` with user-friendly consumer trait mention
 /// This hides the internal CGP trait and presents a more intuitive interface to users
-fn replace_can_use_component(message: &str, _metadata: &CgpErrorMetadata) -> Option<String> {
+fn replace_can_use_component(message: &str, metadata: &CgpErrorMetadata) -> Option<String> {
     // Pattern: "to implement `CanUseComponent<ComponentName>`"
     if !message.contains("CanUseComponent") {
         return None;
@@ -775,7 +792,8 @@ fn replace_can_use_component(message: &str, _metadata: &CgpErrorMetadata) -> Opt
 
         let component_name = message[after_start..end_pos].trim();
 
-        // Replace CanUseComponent<...> with "the consumer trait for `ComponentName`"
+        // Replace CanUseComponent<...> with consumer trait name if available,
+        // otherwise use generic description
         // The original message typically has backticks: `CanUseComponent<...>`
         // We need to handle the backticks properly
         let before = &message[..start];
@@ -785,20 +803,33 @@ fn replace_can_use_component(message: &str, _metadata: &CgpErrorMetadata) -> Opt
         let has_opening_backtick = before.ends_with('`');
         let has_closing_backtick = after.starts_with('`');
 
-        let replacement = if has_opening_backtick && has_closing_backtick {
-            // We're inside backticks, remove outer ones and keep inner ones
-            format!(
-                "{}the consumer trait for `{}`{}",
-                &before[..before.len() - 1], // Remove trailing backtick
-                component_name,
-                &after[1..]
-            ) // Remove leading backtick
+        let replacement = if let Some(consumer_trait) = &metadata.consumer_trait {
+            // Use the specific consumer trait name
+            if has_opening_backtick && has_closing_backtick {
+                format!(
+                    "{}the consumer trait `{}`{}",
+                    &before[..before.len() - 1],
+                    consumer_trait,
+                    &after[1..]
+                )
+            } else {
+                format!("{}the consumer trait `{}`{}", before, consumer_trait, after)
+            }
         } else {
-            // Not in backticks, add them around the component name
-            format!(
-                "{}the consumer trait for `{}`{}",
-                before, component_name, after
-            )
+            // Fall back to generic description with component name
+            if has_opening_backtick && has_closing_backtick {
+                format!(
+                    "{}the consumer trait for `{}`{}",
+                    &before[..before.len() - 1],
+                    component_name,
+                    &after[1..]
+                )
+            } else {
+                format!(
+                    "{}the consumer trait for `{}`{}",
+                    before, component_name, after
+                )
+            }
         };
 
         return Some(replacement);
@@ -917,21 +948,21 @@ mod tests {
         // We expect one error message for base_area
         assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
-        assert_snapshot!(outputs[0], @r###"
-error[E0277]: missing field `height` required by CGP component
-  --> examples/src/base_area.rs:41:9
-   |
-  41 |         AreaCalculatorComponent,
-     |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
-   |
-   = help: struct `Rectangle` is missing the field `height`
-   = note: this field is required by the trait bound `HasRectangleFields`
-   = note: delegation chain:
-           - required for `Rectangle` to implement `HasRectangleFields`
-           - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-           - required for `Rectangle` to implement the consumer trait for `AreaCalculatorComponent`
-   = help: add `pub height: f64` to the `Rectangle` struct definition
-        "###);
+        assert_snapshot!(outputs[0], @"
+        error[E0277]: missing field `height` required by CGP component
+          --> examples/src/base_area.rs:41:9
+           |
+          41 |         AreaCalculatorComponent,
+             |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+           |
+           = help: struct `Rectangle` is missing the field `height`
+           = note: this field is required by the trait bound `HasRectangleFields`
+           = note: delegation chain:
+                   - required for `Rectangle` to implement `HasRectangleFields`
+                   - required for `RectangleArea` to implement the provider trait `AreaCalculator`
+                   - required for `Rectangle` to implement the consumer trait `CanUseRectangle`
+           = help: add `pub height: f64` to the `Rectangle` struct definition
+        ");
     }
 
     #[test]

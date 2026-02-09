@@ -1,3 +1,5 @@
+# Prompt
+
 We will follow the directions in the given reports to build a new cargo-cgp crate that will intercept JSON output from cargo check with `--message-format=json` enabled, and display improved error messages for CGP code.
 
 We are currently working on improving the `render_compiler_message` function to produce better error messages for CGP code.
@@ -53,3 +55,7 @@ To test the implementation, you should write or update a unit test that reads di
 You should also test running `cargo-cgp` against `scaled_area.rs` by running `target/debug/cargo-cgp cgp check`. Ensure that the output is really improved, such as all CGP error messages are formatted properly, and that there is no more dangling output from the previous line.
 
 You should also run existing unit tests and check if there is any change in output. If the output has changed, ensure that the error messages for existing test cases do not get worse. After your changes are finalized, update the relevant `assert_snapshot` using the appropriate `cargo insta` command.
+
+## Follow Up
+
+You have skipped the first message, but you didn't reuse the information from the first error message to improve the second error message. For example, we know that the consumer trait for `AreaCalculatorComponent` is `CanUseRectangle` based on the information from the first error message.
