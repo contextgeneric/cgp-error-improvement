@@ -10,9 +10,6 @@ Your report don't need to focus on information that are not related to the devel
 
 Start your report by writing a summary, followed by a detailed table of content including all sub-sections. 
 
-The draft report is being worked on at 13-combined-report.report.md. Currently, we have written until chapter 6, and the remaining chapters are not yet written.
-Continue writing the full report from chapter 7 to the end. Follow the table of content at the beginning of the report.
-
 Before writing each chapter, write a detailed outline of what you will write inside each section of that chapter. Then only start writing the actual chapter.
 
 Use full sentences and avoid point forms and tables.
