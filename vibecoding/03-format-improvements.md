@@ -2,10 +2,10 @@ We will follow the directions in the given reports to build a new cargo-cgp crat
 
 We are currently working on improving the `render_compiler_message` function to produce better error messages for CGP code.
 
-We will now focus on improving the error message for `scaled_area.rs`. Currently, the error message given is as follows:
+We will now focus on improving the error message for `scaled_area.rs`, with the accompanied `scaled_area.json` log. Currently, the error message given is as follows:
 
 ```
-error[E0277]: the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not satisfied                       
+error[E0277]: the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not satisfied                                                                        
   --> examples/src/scaled_area.rs:58:9
    = help: the trait `AreaCalculator<Rectangle>` is not implemented for `RectangleArea`
    = help: the trait `AreaCalculator<__Context__>` is implemented for `RectangleArea`
@@ -13,7 +13,7 @@ error[E0277]: the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not 
    = note: required for `Rectangle` to implement `cgp::prelude::CanUseComponent<AreaCalculatorComponent>`
    = note: required by a bound in `CanUseRectangle`
 
-error[E0277]: missing field `height` required by CGP component
+error[E0277]: missing field `height` required by CGP componentssages-example                                                                                     
   --> examples/src/scaled_area.rs:58:9
    |
   58 |         AreaCalculatorComponent,
@@ -23,17 +23,20 @@ error[E0277]: missing field `height` required by CGP component
    = note: this field is required by the trait bound `HasRectangleFields`
    = note: delegation chain:
            - required for `Rectangle` to implement `HasRectangleFields`
-           - required for `RectangleArea` to implement the provider trait `AreaCalculator`
            - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
            - required for `Rectangle` to implement the consumer trait for `AreaCalculatorComponent`
    = help: add `pub height: f64` to the `Rectangle` struct definition
 
-For more information about this error, try `rustc --explain E0277`.
+For more information about this error, try `rustc --explain E0277`.s-example
+
+error: could not compile `cgp-error-messages-example` (lib) due to 2 previous errors
+Build failed
 ```
 
 There are a couple of issues with the error message: 
 
 - The first error message is not detected and formatted by the current implementation.
+- There is a dangling `s-example` at the end of the error message.
 - There is a redundant mentioning that `ScaledArea<RectangleArea>` and `RectangleArea` do not implement the provider trait `AreaCalculator`. In such case, the tool should deduce that `ScaledArea<RectangleArea>` is not implemented because of `RectangleArea`. 
     - When tracing the relationship, ensure that other parameters in `IsProviderFor`, e.g. the `Context` type and any additional generic parameters, matches for the relationship between the two providers to be established.
 
@@ -45,5 +48,7 @@ Additionally, also make the following improvements to the code:
 - Refactor the existing unit tests so that the test logic can be reused by new tests like the one you are going to add.
 
 To test the implementation, you should write a unit test that reads directly from the relevant .json files, parse it and calls `render_compiler_message`, and then print the output using `println!`. You should then run the test using `cargo test -p cargo-cgp -- --nocapture` with the specific test name to check the output of the improved error message.
+
+You should also test running `cargo-cgp` against `scaled_area.rs` by running `target/debug/cargo-cgp cgp check`. Ensure that the output is really improved, such as all CGP error messages are formatted properly, and that there is no more dangling output from the previous line.
 
 You should also run existing unit tests and check if there is any change in output. If the output has changed, ensure that the error messages for existing test cases do not get worse. After your changes are finalized, update the relevant `assert_snapshot` using the appropriate `cargo insta` command.
