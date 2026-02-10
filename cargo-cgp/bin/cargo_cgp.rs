@@ -1,10 +1,7 @@
 use std::env;
-use std::io::BufReader;
-use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
-use cargo_cgp::render::render_message;
-use cargo_metadata::Message;
+use anyhow::{Result, bail};
+use cargo_cgp::run_check::run_check;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -22,46 +19,6 @@ fn main() -> Result<()> {
         Some("check") => run_check()?,
         Some(other) => bail!("Unknown subcommand: {}", other),
         None => bail!("Usage: cargo cgp check"),
-    }
-
-    Ok(())
-}
-
-fn run_check() -> Result<()> {
-    // Get any additional arguments to pass through to cargo
-    let args: Vec<String> = env::args().skip(3).collect();
-
-    // Spawn cargo check with JSON output
-    let mut child = Command::new("cargo")
-        .arg("check")
-        .arg("--message-format=json")
-        .args(&args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()) // Capture stderr to prevent progress bar interference
-        .spawn()
-        .context("Failed to spawn cargo check")?;
-
-    // Get stdout handle
-    let stdout = child
-        .stdout
-        .take()
-        .context("Failed to capture stdout from cargo check")?;
-
-    // Parse JSON messages from stdout
-    let reader = BufReader::new(stdout);
-    let messages = Message::parse_stream(reader);
-
-    // Process and render each message
-    for message in messages {
-        let message = message.context("Failed to parse JSON message from cargo")?;
-        render_message(&message);
-    }
-
-    // Wait for cargo check to complete
-    let status = child.wait().context("Failed to wait for cargo check")?;
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
     }
 
     Ok(())
