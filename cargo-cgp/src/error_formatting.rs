@@ -1,6 +1,5 @@
 use miette::{
-    GraphicalReportHandler, LabeledSpan, NamedSource, NarratableReportHandler, SourceOffset,
-    SourceSpan,
+    GraphicalReportHandler, GraphicalTheme, LabeledSpan, MietteHandler, NamedSource, NarratableReportHandler, SourceOffset, SourceSpan
 };
 
 use crate::cgp_diagnostic::CgpDiagnostic;
@@ -411,7 +410,7 @@ pub fn render_diagnostic_graphical(diagnostic: &CgpDiagnostic) -> String {
 /// Renders a CGP diagnostic to a plain text string (no colors)
 pub fn render_diagnostic_plain(diagnostic: &CgpDiagnostic) -> String {
     // Use the narratable handler which produces plain text
-    let handler = NarratableReportHandler::new();
+    let handler = GraphicalReportHandler::new_themed(GraphicalTheme::none());
     let mut output = String::new();
 
     if handler.render_report(&mut output, diagnostic).is_ok() {

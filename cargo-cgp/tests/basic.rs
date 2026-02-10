@@ -1,6 +1,7 @@
-use cargo_cgp::render_compiler_message::render_compiler_message;
+use cargo_cgp::diagnostic_db::DiagnosticDatabase;
+use cargo_cgp::error_formatting::render_diagnostic_plain;
+use cargo_cgp::render::render_message;
 use cargo_metadata::Message;
-use cargo_metadata::diagnostic::DiagnosticLevel;
 use insta::assert_snapshot;
 use std::fs::File;
 use std::io::BufReader;
@@ -18,58 +19,25 @@ fn test_cgp_error_from_json(json_filename: &str, test_name: &str) -> Vec<String>
     println!("Reading JSON from: {}", json_path);
     let file =
         File::open(&json_path).unwrap_or_else(|_| panic!("Failed to open {}", json_filename));
+
     let reader = BufReader::new(file);
 
-    let mut error_count = 0;
-    let mut compiler_message_count = 0;
-    let mut total_messages = 0;
     let mut output_lines = Vec::new();
 
-    // Parse the stream of JSON messages
-    for message_result in Message::parse_stream(reader) {
-        let message = message_result.expect("Failed to parse message");
-        total_messages += 1;
 
-        match &message {
-            Message::CompilerMessage(compiler_msg) => {
-                compiler_message_count += 1;
+    let mut db = DiagnosticDatabase::new();
 
-                // Process error-level diagnostics
-                if matches!(compiler_msg.message.level, DiagnosticLevel::Error) {
-                    error_count += 1;
-
-                    println!("\n=== Original Error #{} ===", error_count);
-                    if let Some(rendered) = &compiler_msg.message.rendered {
-                        println!("{}", rendered);
-                    }
-
-                    println!("\n=== Improved CGP Error #{} ===", error_count);
-                    match render_compiler_message(&compiler_msg) {
-                        Ok(improved) => {
-                            println!("{}", improved);
-                            output_lines.push(improved);
-                        }
-                        Err(e) => {
-                            println!("Error rendering: {}", e);
-                            panic!("Failed to render compiler message: {}", e);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
+    for message in Message::parse_stream(reader) {
+        let message = message.expect("Failed to parse message");
+        render_message(&message, &mut db);
     }
 
-    println!("\n=== Summary for {} ===", test_name);
-    println!("Total messages parsed: {}", total_messages);
-    println!("Compiler messages found: {}", compiler_message_count);
-    println!("Error messages found: {}", error_count);
-
-    assert!(
-        compiler_message_count > 0,
-        "Expected to find at least one compiler message in {}",
-        json_filename
-    );
+    let cgp_diagnostics = db.render_cgp_diagnostics();
+    for diagnostic in cgp_diagnostics {
+        let rendered = render_diagnostic_plain(&diagnostic);
+        println!("{}", rendered);
+        output_lines.push(rendered);
+    }
 
     // Return the output for snapshot testing
     output_lines
@@ -83,21 +51,22 @@ fn test_base_area_error() {
     assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
     assert_snapshot!(outputs[0], @"
-    missing field `heig�t` (possibly incomplete) required by CGP component
-        Diagnostic severity: error
-    Begin snippet for examples/src/base_area.rs starting at line 1, column 1
+    E0277
 
-    snippet line 1:         AreaCalculatorComponent,
-        label at line 1, columns 9 to 31: unsatisfied trait bound
-    diagnostic help: note: some characters in the field name are hidden by the compiler and shown as '�'
-    the struct `Rectangle` is missing the required field `heig�t`
-    ensure a field `heig�t` of the appropriate type is present in the `Rectangle` struct
-    note: this field is required by the trait bound `CanUseRectangle`
-    note: delegation chain:
-      - required for `Rectangle` to implement `HasRectangleFields`
-      - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-      - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-    diagnostic code: E0277
+      x missing field `heig�t` (possibly incomplete) required by CGP component
+       ,-[examples/src/base_area.rs:1:9]
+     1 |         AreaCalculatorComponent,
+       :         ^^^^^^^^^^^|^^^^^^^^^^^
+       :                    `-- unsatisfied trait bound
+       `----
+      help: note: some characters in the field name are hidden by the compiler and shown as '�'
+            the struct `Rectangle` is missing the required field `heig�t`
+            ensure a field `heig�t` of the appropriate type is present in the `Rectangle` struct
+            note: this field is required by the trait bound `CanUseRectangle`
+            note: delegation chain:
+              - required for `Rectangle` to implement `HasRectangleFields`
+              - required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }
 
@@ -117,20 +86,21 @@ fn test_base_area_2_error() {
     );
 
     assert_snapshot!(outputs[0], @"
-    missing field `width` required by CGP component
-        Diagnostic severity: error
-    Begin snippet for examples/src/base_area_2.rs starting at line 1, column 1
+    E0277
 
-    snippet line 1:         AreaCalculatorComponent,
-        label at line 1, columns 9 to 31: unsatisfied trait bound
-    diagnostic help: the struct `Rectangle` is either missing the field `width` or is missing `#[derive(HasField)]`
-    ensure a field `width` of the appropriate type is present in the `Rectangle` struct, or add `#[derive(HasField)]` if the struct is missing the derive
-    note: this field is required by the trait bound `CanUseRectangle`
-    note: delegation chain:
-      - required for `Rectangle` to implement `HasRectangleFields`
-      - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-      - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-    diagnostic code: E0277
+      x missing field `width` required by CGP component
+       ,-[examples/src/base_area_2.rs:1:9]
+     1 |         AreaCalculatorComponent,
+       :         ^^^^^^^^^^^|^^^^^^^^^^^
+       :                    `-- unsatisfied trait bound
+       `----
+      help: the struct `Rectangle` is either missing the field `width` or is missing `#[derive(HasField)]`
+            ensure a field `width` of the appropriate type is present in the `Rectangle` struct, or add `#[derive(HasField)]` if the struct is missing the derive
+            note: this field is required by the trait bound `CanUseRectangle`
+            note: delegation chain:
+              - required for `Rectangle` to implement `HasRectangleFields`
+              - required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }
 
@@ -138,9 +108,8 @@ fn test_base_area_2_error() {
 fn test_scaled_area_error() {
     let outputs = test_cgp_error_from_json("scaled_area.json", "scaled_area");
 
-    // After improved merging, the first error (provider trait error) is no longer
-    // suppressed into an empty message, as it contains useful delegation information.
-    // Both errors should have content now.
+    // FIXME: should merge the two error messages into one.
+
     assert_eq!(outputs.len(), 2, "Expected 2 error messages");
 
     // The first error is about the provider trait relationship
@@ -174,6 +143,20 @@ fn test_scaled_area_error() {
         area_calculator_count
     );
 
+    assert_snapshot!(outputs[0], @"
+    E0277
+
+      x the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not satisfied
+       ,-[examples/src/scaled_area.rs:1:9]
+     1 |         AreaCalculatorComponent,
+       :         ^^^^^^^^^^^|^^^^^^^^^^^
+       :                    `-- unsatisfied trait bound
+       `----
+      help: note: delegation chain:
+              - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+    ");
+
     assert_snapshot!(outputs[1], @"
     missing field `height` required by CGP component
         Diagnostic severity: error
@@ -199,19 +182,20 @@ fn test_scaled_area_2_error() {
     assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
     assert_snapshot!(outputs[0], @"
-    missing field `scale_factor` required by CGP component
-        Diagnostic severity: error
-    Begin snippet for examples/src/scaled_area_2.rs starting at line 1, column 1
+    E0277
 
-    snippet line 1:         AreaCalculatorComponent,
-        label at line 1, columns 9 to 31: unsatisfied trait bound
-    diagnostic help: the struct `Rectangle` is missing the required field `scale_factor`
-    ensure a field `scale_factor` of the appropriate type is present in the `Rectangle` struct
-    note: this field is required by the trait bound `CanUseRectangle`
-    note: delegation chain:
-      - required for `Rectangle` to implement `HasScaleFactor`
-      - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-      - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-    diagnostic code: E0277
+      x missing field `scale_factor` required by CGP component
+       ,-[examples/src/scaled_area_2.rs:1:9]
+     1 |         AreaCalculatorComponent,
+       :         ^^^^^^^^^^^|^^^^^^^^^^^
+       :                    `-- unsatisfied trait bound
+       `----
+      help: the struct `Rectangle` is missing the required field `scale_factor`
+            ensure a field `scale_factor` of the appropriate type is present in the `Rectangle` struct
+            note: this field is required by the trait bound `CanUseRectangle`
+            note: delegation chain:
+              - required for `Rectangle` to implement `HasScaleFactor`
+              - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }
