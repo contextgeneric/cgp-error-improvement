@@ -6,25 +6,6 @@ We are following the directions in `10-combined-report.report.md` to build a car
 
 In the task, you will refactor the code base and make the following improvements.
 
-## Handle `--message-format` CLI
-
-Add and handle a `--message-format` CLI argument that follows the same behavior as `cargo check`. Following is the documentation for the CLI flag.
-
-```
---message-format fmt
-    The output format for diagnostic messages. Can be specified multiple times and consists of comma-separated values. Valid values:
-        human (default): Display in a human-readable text format. Conflicts with short and json.
-        short: Emit shorter, human-readable text messages. Conflicts with human and json.
-        json: Emit JSON messages to stdout. See the reference for more details. Conflicts with human and short.
-        json-diagnostic-short: Ensure the rendered field of JSON messages contains the “short” rendering from rustc. Cannot be used with human or short.
-        json-diagnostic-rendered-ansi: Ensure the rendered field of JSON messages contains embedded ANSI color codes for respecting rustc’s default color scheme. Cannot be used with human or short.
-        json-render-diagnostics: Instruct Cargo to not include rustc diagnostics in JSON messages printed, but instead Cargo itself should render the JSON diagnostics coming from rustc. Cargo’s own JSON diagnostics and others coming from rustc are still emitted. Cannot be used with human or short.
-```
-
-To support all options, you should first investigate how Cargo handles each option. If possible, reuse any existing library code provided by Cargo or cargo-metadata to implement this.
-
-If supporting all options are too complicated, at minimum you must support the `json` format. If you leave out support for any option, provide detailed reasonings.
-
 ## Display errors with `miette`
 
 Follow the suggestions in `10-combined-report.report.md` to use `miette` to display the errors in more colorful ways. 
@@ -34,6 +15,16 @@ To do this, you may need to modify `format_error_message` to return a miette-spe
 When displaying error messages, check that if `cargo-cgp` is running from the terminal, then render the error message in a colourful way using `miette`. Otherwise, render the error message as plain text as before.
 
 When rendering error messages in test and JSON, always use plain text mode without the terminal color modifiers.
+
+Both colourful and plain text errors must be rendered through the same data structure through `miette`. The only difference between the two is one has terminal escape characters to provide color, and the other only use miette to display plain text.
+
+The errors displayed through `miette` should be the same CGP error messages that we have worked hard to render. Do not use `miette` to render the original error messages.
+
+You should remove all existing ad hoc error rendering code, and replace them to use miette. You must ensure that the error messages rendered for both color and plain text mode go through the same code path, and produce the same textual content.
+
+You should also ensure that the miette color mode is enabled when running cargo-cgp from the terminal.
+
+You are free to update the formats and expected output from existing tests to match the new output that is produced through `miette`. But make sure that the new expected in the tests are still showing CGP errors instead of the original errors.
 
 When doing the refactoring, also consider how we can make use of `miette` to render the error messages in different structures that is better suited for rendering with `miette`.
 
@@ -58,13 +49,3 @@ Ensure that the output is really improved, such as all CGP error messages are fo
 ## Planning
 
 Before you start, write a detailed plan on the changes you are going to make in your response.
-
-# Follow Up
-
-You are not using `miette` to display the errors on terminal correctly. First, both colourful and plain text errors must be rendered through the same data structure through `miette`. The only difference between the two is one has terminal escape characters to provide color, and the other only use miette to display plain text.
-
-The errors displayed through `miette` should be the same CGP error messages that we have worked hard to render. Do not use `miette` to render the original error messages.
-
-You should remove all existing ad hoc error rendering code, and replace them to use miette. You must ensure that the error messages rendered for both color and plain text mode go through the same code path, and produce the same textual content.
-
-You should also ensure that the miette color mode is enabled when running cargo-cgp from the terminal.
