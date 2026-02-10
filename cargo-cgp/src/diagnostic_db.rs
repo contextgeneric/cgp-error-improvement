@@ -1,6 +1,7 @@
 /// Module for building an internal database of diagnostics and merging related errors
 /// This implements the approach described in Chapters 7-8 of the report
 use cargo_metadata::diagnostic::{Diagnostic, DiagnosticLevel, DiagnosticSpan};
+use cargo_metadata::{CompilerMessage, PackageId, Target};
 use std::collections::HashMap;
 
 use crate::cgp_patterns::{
@@ -48,6 +49,12 @@ pub struct DiagnosticEntry {
     /// The original diagnostic (we keep the first one as the primary)
     pub original: Diagnostic,
 
+    /// Package ID from the CompilerMessage
+    pub package_id: PackageId,
+
+    /// Target from the CompilerMessage
+    pub target: Target,
+
     /// Extracted field information (missing field errors)
     pub field_info: Option<FieldInfo>,
 
@@ -87,9 +94,11 @@ impl DiagnosticDatabase {
         Self::default()
     }
 
-    /// First pass: Add a diagnostic to the database
+    /// First pass: Add a compiler message to the database
     /// If a related diagnostic already exists, merge information
-    pub fn add_diagnostic(&mut self, diagnostic: &Diagnostic) {
+    pub fn add_diagnostic(&mut self, compiler_message: &CompilerMessage) {
+        let diagnostic = &compiler_message.message;
+
         // Extract key components for grouping
         let primary_span = diagnostic.spans.iter().find(|s| s.is_primary);
 
@@ -122,13 +131,23 @@ impl DiagnosticDatabase {
             Self::merge_diagnostic_info(&mut self.entries, &key, diagnostic);
         } else {
             // Create new entry
-            let entry = Self::create_entry(diagnostic, primary_span.unwrap().clone());
+            let entry = Self::create_entry(
+                diagnostic,
+                primary_span.unwrap().clone(),
+                compiler_message.package_id.clone(),
+                compiler_message.target.clone(),
+            );
             self.entries.insert(key, entry);
         }
     }
 
     /// Creates a new diagnostic entry from a diagnostic
-    fn create_entry(diagnostic: &Diagnostic, primary_span: DiagnosticSpan) -> DiagnosticEntry {
+    fn create_entry(
+        diagnostic: &Diagnostic,
+        primary_span: DiagnosticSpan,
+        package_id: PackageId,
+        target: Target,
+    ) -> DiagnosticEntry {
         // Extract all available information
         let field_info = extract_field_info(diagnostic);
         let component_info = Self::extract_component_info_from_diagnostic(diagnostic);
@@ -145,6 +164,8 @@ impl DiagnosticDatabase {
 
         DiagnosticEntry {
             original: diagnostic.clone(),
+            package_id,
+            target,
             field_info,
             component_info,
             consumer_trait,
@@ -274,8 +295,8 @@ impl DiagnosticDatabase {
         notes
     }
 
-    /// Second pass: Apply deduplication and suppression logic
-    pub fn deduplicate(&mut self) {
+    /// Apply deduplication and suppression logic (private, called internally)
+    fn apply_suppression(&mut self) {
         // Find entries that should be suppressed
         let mut keys_to_suppress = Vec::new();
 
@@ -330,28 +351,52 @@ impl DiagnosticDatabase {
         self.entries.values().collect()
     }
 
-    /// Render all CGP error messages
+    /// Render all CGP error messages as CompilerMessage objects
     /// This should be called after all diagnostics have been collected
-    /// Returns a vector of formatted error message strings ready to print
-    pub fn render_cgp_errors(&mut self) -> Vec<String> {
+    /// Returns a vector of CompilerMessage objects with improved CGP diagnostics
+    pub fn render_compiler_messages(&mut self) -> Vec<CompilerMessage> {
         use crate::error_formatting::format_error_message;
+        use cargo_metadata::CompilerMessageBuilder;
 
-        // Apply deduplication first
-        self.deduplicate();
+        // Apply suppression first
+        self.apply_suppression();
 
         // Get all active (non-suppressed) entries
         let active_entries = self.get_active_entries();
 
-        // Format each entry
+        // Build CompilerMessage for each entry
         let mut results = Vec::new();
         for entry in active_entries {
             let formatted = format_error_message(entry);
             if !formatted.is_empty() {
-                results.push(formatted);
+                // Clone the original diagnostic and update the rendered field
+                let mut improved_diagnostic = entry.original.clone();
+                improved_diagnostic.rendered = Some(formatted);
+
+                // Use the builder to create a CompilerMessage
+                let compiler_message = CompilerMessageBuilder::default()
+                    .package_id(entry.package_id.clone())
+                    .target(entry.target.clone())
+                    .message(improved_diagnostic)
+                    .build()
+                    .expect("Failed to build CompilerMessage");
+
+                results.push(compiler_message);
             }
         }
 
         results
+    }
+
+    /// Render all CGP error messages
+    /// This should be called after all diagnostics have been collected
+    /// Returns a vector of formatted error message strings ready to print
+    pub fn render_cgp_errors(&mut self) -> Vec<String> {
+        // Use render_compiler_messages and extract the rendered field
+        self.render_compiler_messages()
+            .into_iter()
+            .filter_map(|msg| msg.message.rendered)
+            .collect()
     }
 }
 

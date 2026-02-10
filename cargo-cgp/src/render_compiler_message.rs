@@ -5,7 +5,6 @@ use cargo_metadata::CompilerMessage;
 
 use crate::cgp_patterns::is_cgp_diagnostic;
 use crate::diagnostic_db::DiagnosticDatabase;
-use crate::error_formatting::format_error_message;
 
 /// Main entry point for rendering a compiler message
 /// This function processes individual messages, but for best results,
@@ -17,16 +16,19 @@ pub fn render_compiler_message(message: &CompilerMessage) -> Result<String, Erro
     if is_cgp_diagnostic(diagnostic) {
         // For single message processing, create a temporary database
         let mut db = DiagnosticDatabase::new();
-        db.add_diagnostic(diagnostic);
-        db.deduplicate();
+        db.add_diagnostic(message);
 
-        let entries = db.get_active_entries();
-        if entries.is_empty() {
+        let rendered_messages = db.render_compiler_messages();
+        if rendered_messages.is_empty() {
             // All entries were suppressed
             Ok(String::new())
         } else {
-            // Format the first active entry
-            Ok(format_error_message(entries[0]))
+            // Return the rendered field of the first message
+            Ok(rendered_messages[0]
+                .message
+                .rendered
+                .clone()
+                .unwrap_or_default())
         }
     } else {
         // Return the original rendered message for non-CGP errors
@@ -47,21 +49,18 @@ pub fn render_compiler_messages(messages: &[CompilerMessage]) -> Result<Vec<Stri
     for message in messages {
         let diagnostic = &message.message;
         if is_cgp_diagnostic(diagnostic) {
-            db.add_diagnostic(diagnostic);
+            db.add_diagnostic(message);
         }
     }
 
-    // Apply deduplication
-    db.deduplicate();
+    // Get rendered messages
+    let rendered_messages = db.render_compiler_messages();
 
-    // Format all active entries
-    let mut results = Vec::new();
-    for entry in db.get_active_entries() {
-        let formatted = format_error_message(entry);
-        if !formatted.is_empty() {
-            results.push(formatted);
-        }
-    }
+    // Extract the rendered strings
+    let results = rendered_messages
+        .into_iter()
+        .filter_map(|msg| msg.message.rendered)
+        .collect();
 
     Ok(results)
 }
