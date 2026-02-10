@@ -24,7 +24,6 @@ fn test_cgp_error_from_json(json_filename: &str, test_name: &str) -> Vec<String>
 
     let mut output_lines = Vec::new();
 
-
     let mut db = DiagnosticDatabase::new();
 
     for message in Message::parse_stream(reader) {
@@ -54,19 +53,21 @@ fn test_base_area_error() {
     E0277
 
       x missing field `heig�t` (possibly incomplete) required by CGP component
-       ,-[examples/src/base_area.rs:1:9]
-     1 |         AreaCalculatorComponent,
-       :         ^^^^^^^^^^^|^^^^^^^^^^^
-       :                    `-- unsatisfied trait bound
-       `----
+        ,-[examples/src/base_area.rs:41:9]
+     40 |     CanUseRectangle for Rectangle {
+     41 |         AreaCalculatorComponent,
+        :         ^^^^^^^^^^^|^^^^^^^^^^^
+        :                    `-- unsatisfied trait bound
+     42 |     }
+        `----
       help: note: some characters in the field name are hidden by the compiler and shown as '�'
             the struct `Rectangle` is missing the required field `heig�t`
             ensure a field `heig�t` of the appropriate type is present in the `Rectangle` struct
             note: this field is required by the trait bound `CanUseRectangle`
             note: delegation chain:
-              - required for `Rectangle` to implement `HasRectangleFields`
-              - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+              required for `Rectangle` to implement `HasRectangleFields`
+              required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }
 
@@ -89,18 +90,20 @@ fn test_base_area_2_error() {
     E0277
 
       x missing field `width` required by CGP component
-       ,-[examples/src/base_area_2.rs:1:9]
-     1 |         AreaCalculatorComponent,
-       :         ^^^^^^^^^^^|^^^^^^^^^^^
-       :                    `-- unsatisfied trait bound
-       `----
+        ,-[examples/src/base_area_2.rs:41:9]
+     40 |     CanUseRectangle for Rectangle {
+     41 |         AreaCalculatorComponent,
+        :         ^^^^^^^^^^^|^^^^^^^^^^^
+        :                    `-- unsatisfied trait bound
+     42 |     }
+        `----
       help: the struct `Rectangle` is either missing the field `width` or is missing `#[derive(HasField)]`
             ensure a field `width` of the appropriate type is present in the `Rectangle` struct, or add `#[derive(HasField)]` if the struct is missing the derive
             note: this field is required by the trait bound `CanUseRectangle`
             note: delegation chain:
-              - required for `Rectangle` to implement `HasRectangleFields`
-              - required for `RectangleArea` to implement the provider trait `AreaCalculator`
-              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+              required for `Rectangle` to implement `HasRectangleFields`
+              required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }
 
@@ -108,70 +111,34 @@ fn test_base_area_2_error() {
 fn test_scaled_area_error() {
     let outputs = test_cgp_error_from_json("scaled_area.json", "scaled_area");
 
-    // FIXME: should merge the two error messages into one.
+    // Now correctly merged into one error message
+    assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
-    assert_eq!(outputs.len(), 2, "Expected 2 error messages");
-
-    // The first error is about the provider trait relationship
+    // The error should be the comprehensive CGP-formatted missing field error
     assert!(
-        outputs[0].contains("delegation chain") || outputs[0].contains("AreaCalculator"),
-        "First error should contain delegation or AreaCalculator information"
-    );
-
-    // The second error should be the comprehensive CGP-formatted missing field error
-    assert!(
-        outputs[1].contains("missing field `height`"),
-        "Second error should be about missing height field"
-    );
-
-    // The delegation chain should be deduplicated -
-    // should not redundantly mention both ScaledArea<RectangleArea> and RectangleArea
-    let delegation_chain_part = outputs[1]
-        .split("delegation chain:")
-        .nth(1)
-        .expect("Expected delegation chain section");
-
-    // Count how many times "AreaCalculator" appears in provider trait mentions
-    let area_calculator_count = delegation_chain_part
-        .matches("provider trait `AreaCalculator`")
-        .count();
-
-    // Should only mention the provider trait once (not for both ScaledArea and RectangleArea)
-    assert!(
-        area_calculator_count <= 1,
-        "Delegation chain should not redundantly mention the same provider trait multiple times. Found {} mentions.",
-        area_calculator_count
+        outputs[0].contains("missing field `height`"),
+        "Error should be about missing height field"
     );
 
     assert_snapshot!(outputs[0], @"
     E0277
 
-      x the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not satisfied
-       ,-[examples/src/scaled_area.rs:1:9]
-     1 |         AreaCalculatorComponent,
-       :         ^^^^^^^^^^^|^^^^^^^^^^^
-       :                    `-- unsatisfied trait bound
-       `----
-      help: note: delegation chain:
-              - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-    ");
-
-    assert_snapshot!(outputs[1], @"
-    missing field `height` required by CGP component
-        Diagnostic severity: error
-    Begin snippet for examples/src/scaled_area.rs starting at line 1, column 1
-
-    snippet line 1:         AreaCalculatorComponent,
-        label at line 1, columns 9 to 31: unsatisfied trait bound
-    diagnostic help: the struct `Rectangle` is missing the required field `height`
-    ensure a field `height` of the appropriate type is present in the `Rectangle` struct
-    note: this field is required by the trait bound `CanUseRectangle`
-    note: delegation chain:
-      - required for `Rectangle` to implement `HasRectangleFields`
-      - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-      - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-    diagnostic code: E0277
+      x missing field `height` required by CGP component
+        ,-[examples/src/scaled_area.rs:58:9]
+     57 |     CanUseRectangle for Rectangle {
+     58 |         AreaCalculatorComponent,
+        :         ^^^^^^^^^^^|^^^^^^^^^^^
+        :                    `-- unsatisfied trait bound
+     59 |     }
+        `----
+      help: the struct `Rectangle` is missing the required field `height`
+            ensure a field `height` of the appropriate type is present in the `Rectangle` struct
+            note: this field is required by the trait bound `CanUseRectangle`
+            note: delegation chain:
+              the error in `ScaledArea<RectangleArea>` is likely caused by the inner provider `RectangleArea`
+              required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+              required for `Rectangle` to implement `HasRectangleFields`
     ");
 }
 
@@ -185,17 +152,19 @@ fn test_scaled_area_2_error() {
     E0277
 
       x missing field `scale_factor` required by CGP component
-       ,-[examples/src/scaled_area_2.rs:1:9]
-     1 |         AreaCalculatorComponent,
-       :         ^^^^^^^^^^^|^^^^^^^^^^^
-       :                    `-- unsatisfied trait bound
-       `----
+        ,-[examples/src/scaled_area_2.rs:58:9]
+     57 |     CanUseRectangle for Rectangle {
+     58 |         AreaCalculatorComponent,
+        :         ^^^^^^^^^^^|^^^^^^^^^^^
+        :                    `-- unsatisfied trait bound
+     59 |     }
+        `----
       help: the struct `Rectangle` is missing the required field `scale_factor`
             ensure a field `scale_factor` of the appropriate type is present in the `Rectangle` struct
             note: this field is required by the trait bound `CanUseRectangle`
             note: delegation chain:
-              - required for `Rectangle` to implement `HasScaleFactor`
-              - required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-              - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+              required for `Rectangle` to implement `HasScaleFactor`
+              required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
     ");
 }

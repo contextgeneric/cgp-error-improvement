@@ -26,17 +26,21 @@ The current rendering of multi-line help is not very nice. Each line should be p
 
 The `note` entries should be at the same level as the `help`. If that is not possible, convert the `note` to `help`.
 
-## Generalized Error Processing
+## Things to keep note
+
+Following are things that you should keep note of throughout the project.
+
+### Generalized Error Processing
 
 The code you write must be generalized to be able to handle all kinds of CGP error messages. There must not be any hard code identification of module, fields, or constructs coming from the user-provided code. You should only pattern match based on constructs from the CGP libraries, and from the Rust standard libraries.
 
-## Graceful Error Handling
+### Graceful Error Handling
 
 All code in the code base must handle errors gracefully. You must not write code that panics or call methods that may panic like `.unwrap()` or `.expect()`. The only exception to this is for test assertions in test code.
 
 If an error may happen in a function, make it return `Result` instead of panicking or ignoring the error.
 
-## Unit Test
+### Unit Test
 
 You should run existing unit tests and check if there is any change in output. After your changes are finalized, update the relevant `assert_snapshot` using the appropriate `cargo insta` command.
 
@@ -46,7 +50,7 @@ Ensure that all unit test uses `assert_snapshot!` to test the expected output. A
 
 If the output has changed, ensure that the error messages for existing test cases do not get worse.
 
-## End-to-end Test
+### End-to-end Test
 
 You should test running `cargo-cgp` against the example code by running `target/debug/cargo-cgp cgp check`. Before running, edit `lib.rs` to uncomment the specific example module that you want to test, while comment out all other example modules.
 

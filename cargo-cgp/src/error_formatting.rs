@@ -1,9 +1,11 @@
 use miette::{
-    GraphicalReportHandler, GraphicalTheme, LabeledSpan, MietteHandler, NamedSource, NarratableReportHandler, SourceOffset, SourceSpan
+    GraphicalReportHandler, GraphicalTheme, LabeledSpan, NamedSource, SourceOffset, SourceSpan,
 };
 
 use crate::cgp_diagnostic::CgpDiagnostic;
-use crate::cgp_patterns::{derive_provider_trait_name, strip_module_prefixes};
+use crate::cgp_patterns::{
+    ProviderRelationship, derive_provider_trait_name, strip_module_prefixes,
+};
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
 
@@ -58,30 +60,31 @@ fn format_missing_field_error(
         )
     };
 
-    // Build help message
-    let mut help_parts = Vec::new();
+    // Build help message with separate sections
+    let mut help_lines = Vec::new();
 
     if field_info.has_unknown_chars {
-        help_parts.push(format!(
+        help_lines.push(format!(
             "note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'"
         ));
     }
 
+    // Main suggestion
     if entry.has_other_hasfield_impls {
-        help_parts.push(format!(
+        help_lines.push(format!(
             "the struct `{}` is missing the required field `{}`",
             field_info.target_type, formatted_field_name
         ));
-        help_parts.push(format!(
+        help_lines.push(format!(
             "ensure a field `{}` of the appropriate type is present in the `{}` struct",
             formatted_field_name, field_info.target_type
         ));
     } else {
-        help_parts.push(format!(
+        help_lines.push(format!(
             "the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`",
             field_info.target_type, formatted_field_name
         ));
-        help_parts.push(format!(
+        help_lines.push(format!(
             "ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive",
             formatted_field_name, field_info.target_type
         ));
@@ -89,27 +92,27 @@ fn format_missing_field_error(
 
     // Add note about which trait requires this field
     if let Some(consumer_trait) = &entry.consumer_trait {
-        help_parts.push(format!(
+        help_lines.push(format!(
             "note: this field is required by the trait bound `{}`",
             consumer_trait
         ));
     } else {
-        help_parts.push("note: this field is required by a CGP trait bound".to_string());
+        help_lines.push("note: this field is required by a CGP trait bound".to_string());
     }
 
     // Add delegation chain
     if !entry.delegation_notes.is_empty() {
-        help_parts.push("note: delegation chain:".to_string());
+        help_lines.push("note: delegation chain:".to_string());
         let simplified_notes = simplify_delegation_chain(entry);
         for note in simplified_notes {
-            help_parts.push(format!("  - {}", note));
+            help_lines.push(format!("  {}", note));
         }
     }
 
-    let help = if help_parts.is_empty() {
+    let help = if help_lines.is_empty() {
         None
     } else {
-        Some(help_parts.join("\n"))
+        Some(help_lines.join("\n"))
     };
 
     // Build source code and labels
@@ -129,20 +132,20 @@ fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
     let message = entry.message.clone();
 
     // Build help with simplified notes
-    let mut help_parts = Vec::new();
+    let mut help_lines = Vec::new();
 
     if !entry.delegation_notes.is_empty() {
-        help_parts.push("note: delegation chain:".to_string());
+        help_lines.push("note: delegation chain:".to_string());
         let simplified_notes = simplify_delegation_chain(entry);
         for note in simplified_notes {
-            help_parts.push(format!("  - {}", note));
+            help_lines.push(format!("  {}", note));
         }
     }
 
-    let help = if help_parts.is_empty() {
+    let help = if help_lines.is_empty() {
         None
     } else {
-        Some(help_parts.join("\n"))
+        Some(help_lines.join("\n"))
     };
 
     // Build source code and labels
@@ -166,44 +169,101 @@ fn build_source_and_labels(
         None => return (None, vec![]),
     };
 
-    // Reconstruct the source code from the span's text lines
-    let source_text = span
-        .text
-        .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Try to read the actual source file to get proper content and offsets
+    // The file_name might be absolute or relative
+    let file_result = std::fs::read_to_string(&span.file_name).or_else(|_| {
+        // If the path is relative, try from the workspace root
+        // Look for common workspace patterns
+        if let Ok(current_dir) = std::env::current_dir() {
+            // Try current directory first
+            let candidate1 = current_dir.join(&span.file_name);
+            if let Ok(content) = std::fs::read_to_string(&candidate1) {
+                return Ok(content);
+            }
 
-    // Create named source
-    let source_code = NamedSource::new(&span.file_name, source_text);
+            // Try parent directory (in case we're in a subdirectory)
+            if let Some(parent) = current_dir.parent() {
+                let candidate2 = parent.join(&span.file_name);
+                if let Ok(content) = std::fs::read_to_string(&candidate2) {
+                    return Ok(content);
+                }
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not find source file",
+        ))
+    });
 
-    // Create a labeled span for the primary location
-    // Calculate the byte offset within our reconstructed source
-    let byte_offset = if span.line_start > 1 {
-        // If the span doesn't start at line 1, we need to calculate offset
-        // For simplicity, we'll use column offset from start of first line
-        span.column_start.saturating_sub(1)
+    if let Ok(file_content) = file_result {
+        // Use the actual file content
+        let source_code = NamedSource::new(&span.file_name, file_content.clone());
+
+        // Calculate byte offset in the actual file
+        // Count bytes up to the line, then add column offset
+        let lines: Vec<&str> = file_content.lines().collect();
+
+        let mut byte_offset = 0;
+
+        // Add bytes for all lines before the target line (1-indexed)
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line_idx + 1 < span.line_start {
+                byte_offset += line.len() + 1; // +1 for newline
+            } else {
+                break;
+            }
+        }
+
+        // Add column offset (1-indexed, so subtract 1)
+        byte_offset += span.column_start.saturating_sub(1);
+
+        let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+
+        let label_text = span
+            .label
+            .clone()
+            .unwrap_or_else(|| "error occurs here".to_string());
+
+        let labeled_span = LabeledSpan::new_with_span(
+            Some(label_text),
+            SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+        );
+
+        (Some(source_code), vec![labeled_span])
     } else {
-        span.column_start.saturating_sub(1)
-    };
+        // Fallback: reconstruct from span text (old behavior)
+        let source_text = span
+            .text
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
 
-    let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+        let source_code = NamedSource::new(&span.file_name, source_text);
 
-    let label_text = span
-        .label
-        .clone()
-        .unwrap_or_else(|| "error occurs here".to_string());
+        // For fallback, use simple column offset
+        let byte_offset = span.column_start.saturating_sub(1);
+        let span_length = span.column_end.saturating_sub(span.column_start).max(1);
 
-    let labeled_span = LabeledSpan::new_with_span(
-        Some(label_text),
-        SourceSpan::new(SourceOffset::from(byte_offset), span_length),
-    );
+        let label_text = span
+            .label
+            .clone()
+            .unwrap_or_else(|| "error occurs here".to_string());
 
-    (Some(source_code), vec![labeled_span])
+        let labeled_span = LabeledSpan::new_with_span(
+            Some(label_text),
+            SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+        );
+
+        (Some(source_code), vec![labeled_span])
+    }
 }
 
 /// Simplifies the delegation chain by removing redundancy and using CGP-aware terminology
 fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
+    // Detect inner providers BEFORE deduplication
+    let all_inner_providers: Vec<String> = detect_inner_providers(&entry.provider_relationships);
+
     // First deduplicate the provider relationships to remove nested redundancies
     let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
 
@@ -217,6 +277,26 @@ fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
     let deduped_notes = deduplicate_delegation_notes(&entry.delegation_notes);
 
     let mut simplified = Vec::new();
+
+    // If we have inner providers and field errors, add a hint about the root cause
+    // We check this AFTER deduplication to see which outer providers remain
+    if !all_inner_providers.is_empty() && entry.field_info.is_some() {
+        let outer_providers: Vec<_> = deduped_relationships
+            .iter()
+            .filter(|r| {
+                !all_inner_providers
+                    .iter()
+                    .any(|inner| inner == &r.provider_type)
+            })
+            .collect();
+
+        if !outer_providers.is_empty() && !all_inner_providers.is_empty() {
+            simplified.push(format!(
+                "the error in `{}` is likely caused by the inner provider `{}`",
+                outer_providers[0].provider_type, all_inner_providers[0]
+            ));
+        }
+    }
 
     for note in deduped_notes {
         // Parse provider info from the note to check if it should be kept
@@ -241,6 +321,43 @@ fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
     }
 
     simplified
+}
+
+/// Detects inner providers in a list of provider relationships
+/// Returns the list of inner provider types (those that appear as type parameters in other providers)
+fn detect_inner_providers(relationships: &[ProviderRelationship]) -> Vec<String> {
+    let mut inner_providers = Vec::new();
+
+    for rel in relationships {
+        // Check if this provider appears as a type parameter in any other provider
+        for other in relationships {
+            if rel.provider_type != other.provider_type {
+                if is_contained_type_parameter(&rel.provider_type, &other.provider_type) {
+                    if !inner_providers.contains(&rel.provider_type) {
+                        inner_providers.push(rel.provider_type.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    inner_providers
+}
+
+/// Checks if inner_type appears as a type parameter within outer_type
+/// For example, "RectangleArea" is contained in "ScaledArea<RectangleArea>"
+fn is_contained_type_parameter(inner_type: &str, outer_type: &str) -> bool {
+    // Check various patterns where inner could appear in outer
+    let patterns = [
+        format!("<{}>", inner_type),
+        format!("<{},", inner_type),
+        format!(", {}>", inner_type),
+        format!(", {},", inner_type),
+        format!("< {}", inner_type), // with spaces
+        format!("{} >", inner_type),
+    ];
+
+    patterns.iter().any(|pattern| outer_type.contains(pattern))
 }
 
 /// Simplifies a single delegation note

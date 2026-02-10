@@ -111,28 +111,43 @@ impl DiagnosticDatabase {
 
         let location = SourceLocation::from_span(primary_span);
 
-        // Extract component info for grouping
-        let component_info = extract_component_info(&diagnostic.message).or_else(|| {
-            // Try children
-            for child in &diagnostic.children {
-                if let Some(info) = extract_component_info(&child.message) {
-                    return Some(info);
+        // Extract component info for grouping - try all children and notes
+        let component_info = Self::extract_component_info_from_diagnostic(diagnostic);
+
+        // Try to match by location first, even without component info
+        // This handles cases where one error has component info and the other doesn't
+        let mut matched_key = None;
+
+        // If we have component info, try exact match first
+        if let Some(ref comp_info) = component_info {
+            let key_with_component = DiagnosticKey {
+                location: location.clone(),
+                component: Some(comp_info.component_type.clone()),
+            };
+            if self.entries.contains_key(&key_with_component) {
+                matched_key = Some(key_with_component);
+            }
+        }
+
+        // If no exact match, try to find any entry at the same location
+        if matched_key.is_none() {
+            for existing_key in self.entries.keys() {
+                if existing_key.location == location {
+                    matched_key = Some(existing_key.clone());
+                    break;
                 }
             }
-            None
-        });
+        }
 
-        let key = DiagnosticKey {
-            location: location.clone(),
-            component: component_info.as_ref().map(|c| c.component_type.clone()),
-        };
-
-        // Check if we already have an entry for this key
-        if self.entries.contains_key(&key) {
+        if let Some(existing_key) = matched_key {
             // Merge new information into existing entry
-            Self::merge_diagnostic_info(&mut self.entries, &key, diagnostic);
+            Self::merge_diagnostic_info(&mut self.entries, &existing_key, diagnostic);
         } else {
-            // Create new entry
+            // Create new entry with the component info we found
+            let key = DiagnosticKey {
+                location: location.clone(),
+                component: component_info.as_ref().map(|c| c.component_type.clone()),
+            };
             let entry = Self::create_entry(
                 diagnostic,
                 primary_span.clone(),
