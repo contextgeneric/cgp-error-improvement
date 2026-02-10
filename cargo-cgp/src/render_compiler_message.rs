@@ -5,6 +5,7 @@ use cargo_metadata::CompilerMessage;
 
 use crate::cgp_patterns::is_cgp_diagnostic;
 use crate::diagnostic_db::DiagnosticDatabase;
+use crate::error_formatting::render_diagnostic_plain;
 
 /// Main entry point for rendering a compiler message
 /// This function processes individual messages, but for best results,
@@ -18,17 +19,13 @@ pub fn render_compiler_message(message: &CompilerMessage) -> Result<String, Erro
         let mut db = DiagnosticDatabase::new();
         db.add_diagnostic(message);
 
-        let rendered_messages = db.render_compiler_messages();
-        if rendered_messages.is_empty() {
+        let diagnostics = db.render_cgp_diagnostics();
+        if diagnostics.is_empty() {
             // All entries were suppressed
             Ok(String::new())
         } else {
-            // Return the rendered field of the first message
-            Ok(rendered_messages[0]
-                .message
-                .rendered
-                .clone()
-                .unwrap_or_default())
+            // Render the first diagnostic in plain text mode (for test compatibility)
+            Ok(render_diagnostic_plain(&diagnostics[0]))
         }
     } else {
         // Return the original rendered message for non-CGP errors
@@ -53,13 +50,11 @@ pub fn render_compiler_messages(messages: &[CompilerMessage]) -> Result<Vec<Stri
         }
     }
 
-    // Get rendered messages
-    let rendered_messages = db.render_compiler_messages();
-
-    // Extract the rendered strings
-    let results = rendered_messages
-        .into_iter()
-        .filter_map(|msg| msg.message.rendered)
+    // Get rendered diagnostics and convert to strings
+    let diagnostics = db.render_cgp_diagnostics();
+    let results = diagnostics
+        .iter()
+        .map(|diag| render_diagnostic_plain(diag))
         .collect();
 
     Ok(results)

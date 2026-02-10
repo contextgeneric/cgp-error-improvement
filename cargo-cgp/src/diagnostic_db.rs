@@ -100,14 +100,15 @@ impl DiagnosticDatabase {
         let diagnostic = &compiler_message.message;
 
         // Extract key components for grouping
-        let primary_span = diagnostic.spans.iter().find(|s| s.is_primary);
+        let primary_span = match diagnostic.spans.iter().find(|s| s.is_primary) {
+            Some(span) => span,
+            None => {
+                // Can't process without a location
+                return;
+            }
+        };
 
-        if primary_span.is_none() {
-            // Can't process without a location
-            return;
-        }
-
-        let location = SourceLocation::from_span(primary_span.unwrap());
+        let location = SourceLocation::from_span(primary_span);
 
         // Extract component info for grouping
         let component_info = extract_component_info(&diagnostic.message).or_else(|| {
@@ -133,7 +134,7 @@ impl DiagnosticDatabase {
             // Create new entry
             let entry = Self::create_entry(
                 diagnostic,
-                primary_span.unwrap().clone(),
+                primary_span.clone(),
                 compiler_message.package_id.clone(),
                 compiler_message.target.clone(),
             );
@@ -305,34 +306,20 @@ impl DiagnosticDatabase {
         self.entries.values().collect()
     }
 
-    /// Render all CGP error messages as CompilerMessage objects
+    /// Render all CGP error messages as CgpDiagnostic objects
     /// This should be called after all diagnostics have been collected
-    /// Returns a vector of CompilerMessage objects with improved CGP diagnostics
-    pub fn render_compiler_messages(&mut self) -> Vec<CompilerMessage> {
+    /// Returns a vector of CgpDiagnostic objects with improved CGP diagnostics
+    pub fn render_cgp_diagnostics(&mut self) -> Vec<crate::error_formatting::CgpDiagnostic> {
         use crate::error_formatting::format_error_message;
-        use cargo_metadata::CompilerMessageBuilder;
 
         // Get all active (non-suppressed) entries
         let active_entries = self.get_active_entries();
 
-        // Build CompilerMessage for each entry
+        // Build CgpDiagnostic for each entry
         let mut results = Vec::new();
         for entry in active_entries {
-            let formatted = format_error_message(entry);
-            if !formatted.is_empty() {
-                // Clone the original diagnostic and update the rendered field
-                let mut improved_diagnostic = entry.original.clone();
-                improved_diagnostic.rendered = Some(formatted);
-
-                // Use the builder to create a CompilerMessage
-                let compiler_message = CompilerMessageBuilder::default()
-                    .package_id(entry.package_id.clone())
-                    .target(entry.target.clone())
-                    .message(improved_diagnostic)
-                    .build()
-                    .expect("Failed to build CompilerMessage");
-
-                results.push(compiler_message);
+            if let Some(diagnostic) = format_error_message(entry) {
+                results.push(diagnostic);
             }
         }
 
@@ -343,10 +330,11 @@ impl DiagnosticDatabase {
     /// This should be called after all diagnostics have been collected
     /// Returns a vector of formatted error message strings ready to print
     pub fn render_cgp_errors(&mut self) -> Vec<String> {
-        // Use render_compiler_messages and extract the rendered field
-        self.render_compiler_messages()
-            .into_iter()
-            .filter_map(|msg| msg.message.rendered)
+        use crate::error_formatting::render_diagnostic_plain;
+
+        self.render_cgp_diagnostics()
+            .iter()
+            .map(|diag| render_diagnostic_plain(diag))
             .collect()
     }
 }

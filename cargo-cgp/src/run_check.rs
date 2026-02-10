@@ -3,6 +3,7 @@ use std::io::BufReader;
 use std::process::{Command, Stdio};
 
 use crate::diagnostic_db::DiagnosticDatabase;
+use crate::error_formatting::{is_terminal, render_diagnostic_graphical, render_diagnostic_plain};
 use crate::render::render_message;
 use anyhow::{Context, Result};
 use cargo_metadata::Message;
@@ -41,9 +42,17 @@ pub fn run_check() -> Result<()> {
     }
 
     // After all messages are processed, render all CGP errors
-    let cgp_errors = db.render_cgp_errors();
-    for error in cgp_errors {
-        println!("{}", error);
+    // Use colorful output if in terminal, plain text otherwise
+    let use_color = is_terminal();
+    let cgp_diagnostics = db.render_cgp_diagnostics();
+
+    for diagnostic in cgp_diagnostics {
+        let rendered = if use_color {
+            render_diagnostic_graphical(&diagnostic)
+        } else {
+            render_diagnostic_plain(&diagnostic)
+        };
+        println!("{}", rendered);
     }
 
     // Wait for cargo check to complete

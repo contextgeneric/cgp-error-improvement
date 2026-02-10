@@ -3,6 +3,66 @@
 use crate::cgp_patterns::{derive_provider_trait_name, strip_module_prefixes};
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
+use miette::{
+    Diagnostic, GraphicalReportHandler, LabeledSpan, NamedSource, NarratableReportHandler,
+    SourceOffset, SourceSpan,
+};
+use std::fmt;
+
+/// A CGP-aware diagnostic that implements miette's Diagnostic trait
+#[derive(Debug, Clone)]
+pub struct CgpDiagnostic {
+    /// The main error message
+    message: String,
+    /// Error code (e.g., "E0277")
+    code: Option<String>,
+    /// Help text with suggestions
+    help: Option<String>,
+    /// Source code with file name
+    source_code: Option<NamedSource<String>>,
+    /// Labeled spans for highlighting
+    labels: Vec<LabeledSpan>,
+}
+
+impl fmt::Display for CgpDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CgpDiagnostic {}
+
+impl Diagnostic for CgpDiagnostic {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        self.code
+            .as_ref()
+            .map(|c| Box::new(c.clone()) as Box<dyn fmt::Display>)
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        self.help
+            .as_ref()
+            .map(|h| Box::new(h.clone()) as Box<dyn fmt::Display>)
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        self.source_code
+            .as_ref()
+            .map(|s| s as &dyn miette::SourceCode)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        if self.labels.is_empty() {
+            None
+        } else {
+            Some(Box::new(self.labels.clone().into_iter()))
+        }
+    }
+
+    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
+        None // We'll add related diagnostics through help/notes text
+    }
+}
 
 /// Checks if a field name contains non-basic identifier characters
 /// Basic identifier characters are: a-z, A-Z, 0-9, underscore, hyphen, and the replacement character
@@ -24,161 +84,179 @@ fn format_field_name(field_name: &str) -> String {
 }
 
 /// Formats a diagnostic entry as an improved CGP error message
-pub fn format_error_message(entry: &DiagnosticEntry) -> String {
-    let mut output = String::new();
-
-    // Build the error header
-    if let Some(code) = &entry.error_code {
-        output.push_str(&format!("error[{}]: ", code));
-    } else {
-        output.push_str("error: ");
-    }
-
+pub fn format_error_message(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
     // Format based on what kind of error this is
     if let Some(field_info) = &entry.field_info {
         // This is a missing field error - the most common CGP error
-        format_missing_field_error(&mut output, entry, field_info);
+        format_missing_field_error(entry, field_info)
     } else {
         // Fallback to a generic CGP error format
-        format_generic_cgp_error(&mut output, entry);
+        format_generic_cgp_error(entry)
     }
-
-    output
 }
 
 /// Formats a missing field error with CGP-aware messaging
 fn format_missing_field_error(
-    output: &mut String,
     entry: &DiagnosticEntry,
     field_info: &crate::cgp_patterns::FieldInfo,
-) {
+) -> Option<CgpDiagnostic> {
     let formatted_field_name = format_field_name(&field_info.field_name);
 
-    // Header message
-    if field_info.is_complete {
-        output.push_str(&format!(
-            "missing field `{}` required by CGP component\n",
+    // Build the main error message
+    let message = if field_info.is_complete {
+        format!(
+            "missing field `{}` required by CGP component",
             formatted_field_name
-        ));
+        )
     } else {
-        output.push_str(&format!(
-            "missing field `{}` (possibly incomplete) required by CGP component\n",
+        format!(
+            "missing field `{}` (possibly incomplete) required by CGP component",
             formatted_field_name
-        ));
-    }
+        )
+    };
 
-    // Show source location
-    if let Some(span) = &entry.primary_span {
-        output.push_str(&format!(
-            "  --> {}:{}:{}\n",
-            span.file_name, span.line_start, span.column_start
-        ));
-        output.push_str("   |\n");
+    // Build help message
+    let mut help_parts = Vec::new();
 
-        // Show the relevant source lines
-        for (i, text_line) in span.text.iter().enumerate() {
-            let line_num = span.line_start + i;
-            output.push_str(&format!("{:4} | {}\n", line_num, text_line.text));
-
-            // Add the caret line for primary span
-            if i == 0 {
-                let spaces = " ".repeat(span.column_start.saturating_sub(1));
-                let carets = "^".repeat(span.column_end.saturating_sub(span.column_start).max(1));
-                let label = span.label.as_deref().unwrap_or("");
-                output.push_str(&format!("     | {}{} {}\n", spaces, carets, label));
-            }
-        }
-
-        output.push_str("   |\n");
-    }
-
-    // Note about unknown characters if present
     if field_info.has_unknown_chars {
-        output.push_str("   = note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'\n");
+        help_parts.push(format!(
+            "note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'"
+        ));
     }
 
-    // Help message
     if entry.has_other_hasfield_impls {
-        // The struct has derived HasField (we can see other field implementations)
-        // So the field is truly missing
-        output.push_str(&format!(
-            "   = help: the struct `{}` is missing the required field `{}`\n",
+        help_parts.push(format!(
+            "the struct `{}` is missing the required field `{}`",
             field_info.target_type, formatted_field_name
+        ));
+        help_parts.push(format!(
+            "ensure a field `{}` of the appropriate type is present in the `{}` struct",
+            formatted_field_name, field_info.target_type
         ));
     } else {
-        // The struct has no HasField implementations visible
-        // Either the field is missing OR the struct needs #[derive(HasField)]
-        output.push_str(&format!(
-            "   = help: the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`\n",
+        help_parts.push(format!(
+            "the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`",
             field_info.target_type, formatted_field_name
+        ));
+        help_parts.push(format!(
+            "ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive",
+            formatted_field_name, field_info.target_type
         ));
     }
 
-    // Note about which trait requires this field
+    // Add note about which trait requires this field
     if let Some(consumer_trait) = &entry.consumer_trait {
-        output.push_str(&format!(
-            "   = note: this field is required by the trait bound `{}`\n",
+        help_parts.push(format!(
+            "note: this field is required by the trait bound `{}`",
             consumer_trait
         ));
     } else {
-        // Fall back to a generic message
-        output.push_str("   = note: this field is required by a CGP trait bound\n");
+        help_parts.push("note: this field is required by a CGP trait bound".to_string());
     }
 
-    // Show simplified delegation chain
+    // Add delegation chain
     if !entry.delegation_notes.is_empty() {
-        output.push_str("   = note: delegation chain:\n");
+        help_parts.push("note: delegation chain:".to_string());
         let simplified_notes = simplify_delegation_chain(entry);
         for note in simplified_notes {
-            output.push_str(&format!("           - {}\n", note));
+            help_parts.push(format!("  - {}", note));
         }
     }
 
-    // Suggest fixes
-    if entry.has_other_hasfield_impls {
-        output.push_str(&format!(
-            "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct\n",
-            formatted_field_name, field_info.target_type
-        ));
+    let help = if help_parts.is_empty() {
+        None
     } else {
-        output.push_str(&format!(
-            "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive\n",
-            formatted_field_name, field_info.target_type
-        ));
-    }
+        Some(help_parts.join("\n"))
+    };
+
+    // Build source code and labels
+    let (source_code, labels) = build_source_and_labels(entry);
+
+    Some(CgpDiagnostic {
+        message,
+        code: entry.error_code.clone(),
+        help,
+        source_code,
+        labels,
+    })
 }
 
 /// Formats a generic CGP error (when we don't have specific field info)
-fn format_generic_cgp_error(output: &mut String, entry: &DiagnosticEntry) {
-    // Use the original error message
-    output.push_str(&entry.message);
-    output.push('\n');
+fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
+    let message = entry.message.clone();
 
-    // Show source location
-    if let Some(span) = &entry.primary_span {
-        output.push_str(&format!(
-            "  --> {}:{}:{}\n",
-            span.file_name, span.line_start, span.column_start
-        ));
-        output.push_str("   |\n");
+    // Build help with simplified notes
+    let mut help_parts = Vec::new();
 
-        // Show source lines
-        for (i, text_line) in span.text.iter().enumerate() {
-            let line_num = span.line_start + i;
-            output.push_str(&format!("{:4} | {}\n", line_num, text_line.text));
-        }
-
-        output.push_str("   |\n");
-    }
-
-    // Show simplified notes
     if !entry.delegation_notes.is_empty() {
-        output.push_str("   = note: delegation chain:\n");
+        help_parts.push("note: delegation chain:".to_string());
         let simplified_notes = simplify_delegation_chain(entry);
         for note in simplified_notes {
-            output.push_str(&format!("           - {}\n", note));
+            help_parts.push(format!("  - {}", note));
         }
     }
+
+    let help = if help_parts.is_empty() {
+        None
+    } else {
+        Some(help_parts.join("\n"))
+    };
+
+    // Build source code and labels
+    let (source_code, labels) = build_source_and_labels(entry);
+
+    Some(CgpDiagnostic {
+        message,
+        code: entry.error_code.clone(),
+        help,
+        source_code,
+        labels,
+    })
+}
+
+/// Builds source code and labeled spans from diagnostic entry
+fn build_source_and_labels(
+    entry: &DiagnosticEntry,
+) -> (Option<NamedSource<String>>, Vec<LabeledSpan>) {
+    let span = match &entry.primary_span {
+        Some(s) => s,
+        None => return (None, vec![]),
+    };
+
+    // Reconstruct the source code from the span's text lines
+    let source_text = span
+        .text
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Create named source
+    let source_code = NamedSource::new(&span.file_name, source_text);
+
+    // Create a labeled span for the primary location
+    // Calculate the byte offset within our reconstructed source
+    let byte_offset = if span.line_start > 1 {
+        // If the span doesn't start at line 1, we need to calculate offset
+        // For simplicity, we'll use column offset from start of first line
+        span.column_start.saturating_sub(1)
+    } else {
+        span.column_start.saturating_sub(1)
+    };
+
+    let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+
+    let label_text = span
+        .label
+        .clone()
+        .unwrap_or_else(|| "error occurs here".to_string());
+
+    let labeled_span = LabeledSpan::new_with_span(
+        Some(label_text),
+        SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+    );
+
+    (Some(source_code), vec![labeled_span])
 }
 
 /// Simplifies the delegation chain by removing redundancy and using CGP-aware terminology
@@ -371,6 +449,39 @@ fn find_matching_bracket(start_pos: usize, text: &str) -> Option<usize> {
     }
 
     None
+}
+
+/// Renders a CGP diagnostic to a string using the graphical (colorful) handler
+pub fn render_diagnostic_graphical(diagnostic: &CgpDiagnostic) -> String {
+    let handler = GraphicalReportHandler::new();
+    let mut output = String::new();
+
+    if handler.render_report(&mut output, diagnostic).is_ok() {
+        output
+    } else {
+        // Fallback to simple display if rendering fails
+        format!("error: {}", diagnostic.message)
+    }
+}
+
+/// Renders a CGP diagnostic to a plain text string (no colors)
+pub fn render_diagnostic_plain(diagnostic: &CgpDiagnostic) -> String {
+    // Use the narratable handler which produces plain text
+    let handler = NarratableReportHandler::new();
+    let mut output = String::new();
+
+    if handler.render_report(&mut output, diagnostic).is_ok() {
+        output
+    } else {
+        // Fallback to simple display if rendering fails
+        format!("error: {}", diagnostic.message)
+    }
+}
+
+/// Detects if we're running in a terminal that supports colors
+pub fn is_terminal() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
 }
 
 #[cfg(test)]
