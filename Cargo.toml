@@ -23,5 +23,6 @@ cgp-error-anyhow    = { version = "0.6.1" }
 cargo_metadata      = { version = "0.23.1", features = ["builder"] }
 anyhow              = { version = "1.0.101" }
 insta               = { version = "1.46.3" }
+miette              = { version = "7.6.0" }
 serde               = { version = "1.0.228" }
 serde_json          = { version = "1.0.149" }
