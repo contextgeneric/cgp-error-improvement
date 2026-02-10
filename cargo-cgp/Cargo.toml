@@ -18,4 +18,3 @@ cargo_metadata      = { workspace = true }
 anyhow              = { workspace = true }
 insta               = { workspace = true }
 miette              = { workspace = true, features = ["fancy"] }
-serde_json          = { workspace = true }

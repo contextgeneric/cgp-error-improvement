@@ -71,7 +71,6 @@ dependencies = [
  "cgp",
  "insta",
  "miette",
- "serde_json",
 ]
 
 [[package]]
