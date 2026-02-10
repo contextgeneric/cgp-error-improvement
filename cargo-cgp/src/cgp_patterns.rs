@@ -46,6 +46,8 @@ pub struct FieldInfo {
     pub field_name: String,
     /// Whether the field name was fully extracted (false if truncated)
     pub is_complete: bool,
+    /// Whether the field name contains unknown characters (shown as �)
+    pub has_unknown_chars: bool,
     /// The struct/type that is missing the field
     pub target_type: String,
 }
@@ -179,6 +181,7 @@ pub fn extract_field_info(diagnostic: &Diagnostic) -> Option<FieldInfo> {
                 return Some(FieldInfo {
                     field_name: field_name_result.0,
                     is_complete: field_name_result.1,
+                    has_unknown_chars: field_name_result.2,
                     target_type,
                 });
             }
@@ -189,8 +192,8 @@ pub fn extract_field_info(diagnostic: &Diagnostic) -> Option<FieldInfo> {
 }
 
 /// Extracts field name from Symbol<N, Chars<'x', Chars<'y', ...>>> pattern
-/// Returns (field_name, is_complete)
-fn extract_field_name_from_symbol(message: &str) -> Option<(String, bool)> {
+/// Returns (field_name, is_complete, has_unknown_chars)
+fn extract_field_name_from_symbol(message: &str) -> Option<(String, bool, bool)> {
     // Get the part before "but trait" if it exists (to focus on the unsatisfied trait)
     let relevant_part = if let Some(pos) = message.find("but trait") {
         &message[..pos]
@@ -202,7 +205,7 @@ fn extract_field_name_from_symbol(message: &str) -> Option<(String, bool)> {
     let expected_length = extract_symbol_length(relevant_part)?;
 
     // Extract visible characters from Chars<'x', Chars<'y', ...>> chain
-    let chars = extract_chars_from_pattern(relevant_part);
+    let (chars, has_unknown) = extract_chars_from_pattern(relevant_part);
 
     if chars.is_empty() {
         return None;
@@ -211,7 +214,7 @@ fn extract_field_name_from_symbol(message: &str) -> Option<(String, bool)> {
     let field_name: String = chars.iter().collect();
     let is_complete = field_name.len() == expected_length;
 
-    Some((field_name, is_complete))
+    Some((field_name, is_complete, has_unknown))
 }
 
 /// Extracts the expected length from Symbol<N, ...> pattern
@@ -223,8 +226,11 @@ fn extract_symbol_length(text: &str) -> Option<usize> {
 }
 
 /// Extracts all characters from Chars<'x', Chars<'y', ...>> pattern
-fn extract_chars_from_pattern(text: &str) -> Vec<char> {
+/// Returns (chars, has_unknown_chars)
+/// Unknown characters (represented as '_' in the original) are replaced with '�' (U+FFFD)
+fn extract_chars_from_pattern(text: &str) -> (Vec<char>, bool) {
     let mut chars = Vec::new();
+    let mut has_unknown = false;
     let mut idx = 0;
 
     while idx < text.len() {
@@ -233,16 +239,19 @@ fn extract_chars_from_pattern(text: &str) -> Vec<char> {
             let char_start = idx + 7;
             if let Some(ch) = text[char_start..].chars().next() {
                 // Extract the character if it's not the closing quote
-                // Underscores are valid field name characters and should be included
                 if ch != '\'' {
                     chars.push(ch);
                 }
             }
+        } else if text[idx..].starts_with("Chars<_") {
+            // This is an unknown/hidden character (no quotes around it)
+            chars.push('\u{FFFD}'); // Unicode replacement character
+            has_unknown = true;
         }
         idx += 1;
     }
 
-    chars
+    (chars, has_unknown)
 }
 
 /// Extracts type name from "is not implemented for `Type`" pattern
@@ -412,12 +421,15 @@ mod tests {
     #[test]
     fn test_extract_chars_from_pattern() {
         let text = "Chars<'h', Chars<'e', Chars<'i', Chars<'g', Chars<'h', Chars<'t', Nil>>>>>>";
-        let chars = extract_chars_from_pattern(text);
+        let (chars, has_unknown) = extract_chars_from_pattern(text);
         assert_eq!(chars, vec!['h', 'e', 'i', 'g', 'h', 't']);
+        assert!(!has_unknown);
 
-        let text2 = "Chars<'w', Chars<'i', Chars<'d', Chars<'_', Chars<'h', Nil>>>>>";
-        let chars2 = extract_chars_from_pattern(text2);
-        // Underscores are valid field name characters
-        assert_eq!(chars2, vec!['w', 'i', 'd', '_', 'h']);
+        // When a character is hidden by the compiler, it appears as Chars<_, (without quotes)
+        let text2 = "Chars<'w', Chars<'i', Chars<'d', Chars<_, Chars<'h', Nil>>>>>";
+        let (chars2, has_unknown2) = extract_chars_from_pattern(text2);
+        // Hidden characters are shown as �
+        assert_eq!(chars2, vec!['w', 'i', 'd', '\u{FFFD}', 'h']);
+        assert!(has_unknown2);
     }
 }

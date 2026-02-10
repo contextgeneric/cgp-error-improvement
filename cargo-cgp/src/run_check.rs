@@ -2,6 +2,7 @@ use std::env;
 use std::io::BufReader;
 use std::process::{Command, Stdio};
 
+use crate::diagnostic_db::DiagnosticDatabase;
 use crate::render::render_message;
 use anyhow::{Context, Result};
 use cargo_metadata::Message;
@@ -30,10 +31,19 @@ pub fn run_check() -> Result<()> {
     let reader = BufReader::new(stdout);
     let messages = Message::parse_stream(reader);
 
+    // Create database to collect CGP diagnostics
+    let mut db = DiagnosticDatabase::new();
+
     // Process and render each message
     for message in messages {
         let message = message.context("Failed to parse JSON message from cargo")?;
-        render_message(&message);
+        render_message(&message, &mut db);
+    }
+
+    // After all messages are processed, render all CGP errors
+    let cgp_errors = db.render_cgp_errors();
+    for error in cgp_errors {
+        println!("{}", error);
     }
 
     // Wait for cargo check to complete

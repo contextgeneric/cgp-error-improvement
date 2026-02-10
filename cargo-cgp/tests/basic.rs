@@ -83,19 +83,20 @@ fn test_base_area_error() {
     assert_eq!(outputs.len(), 1, "Expected 1 error message");
 
     assert_snapshot!(outputs[0], @"
-    error[E0277]: missing field `heigt` (possibly incomplete) required by CGP component
+    error[E0277]: missing field `heig�t` (possibly incomplete) required by CGP component
       --> examples/src/base_area.rs:41:9
        |
       41 |         AreaCalculatorComponent,
          |         ^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
        |
-       = help: the struct `Rectangle` is missing the required field `heigt`
+       = note: some characters in the field name are hidden by the compiler and shown as '�'
+       = help: the struct `Rectangle` is missing the required field `heig�t`
        = note: this field is required by the trait bound `CanUseRectangle`
        = note: delegation chain:
                - required for `Rectangle` to implement `HasRectangleFields`
                - required for `RectangleArea` to implement the provider trait `AreaCalculator`
                - required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-       = help: ensure a field `heigt` of the appropriate type is present in the `Rectangle` struct
+       = help: ensure a field `heig�t` of the appropriate type is present in the `Rectangle` struct
     ");
 }
 

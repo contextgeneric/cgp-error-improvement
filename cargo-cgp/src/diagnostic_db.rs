@@ -329,6 +329,30 @@ impl DiagnosticDatabase {
     pub fn get_all_entries(&self) -> Vec<&DiagnosticEntry> {
         self.entries.values().collect()
     }
+
+    /// Render all CGP error messages
+    /// This should be called after all diagnostics have been collected
+    /// Returns a vector of formatted error message strings ready to print
+    pub fn render_cgp_errors(&mut self) -> Vec<String> {
+        use crate::error_formatting::format_error_message;
+
+        // Apply deduplication first
+        self.deduplicate();
+
+        // Get all active (non-suppressed) entries
+        let active_entries = self.get_active_entries();
+
+        // Format each entry
+        let mut results = Vec::new();
+        for entry in active_entries {
+            let formatted = format_error_message(entry);
+            if !formatted.is_empty() {
+                results.push(formatted);
+            }
+        }
+
+        results
+    }
 }
 
 #[cfg(test)]

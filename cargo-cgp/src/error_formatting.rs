@@ -4,6 +4,25 @@ use crate::cgp_patterns::{derive_provider_trait_name, strip_module_prefixes};
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
 
+/// Checks if a field name contains non-basic identifier characters
+/// Basic identifier characters are: a-z, A-Z, 0-9, underscore, hyphen, and the replacement character
+fn has_non_basic_identifier_chars(field_name: &str) -> bool {
+    field_name
+        .chars()
+        .any(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '\u{FFFD}')
+}
+
+/// Formats a field name for display, escaping it like a Rust string if it contains special characters
+fn format_field_name(field_name: &str) -> String {
+    if has_non_basic_identifier_chars(field_name) {
+        // Escape like a Rust string
+        format!("\"{}\"", field_name.escape_default())
+    } else {
+        // Display as-is
+        field_name.to_string()
+    }
+}
+
 /// Formats a diagnostic entry as an improved CGP error message
 pub fn format_error_message(entry: &DiagnosticEntry) -> String {
     let mut output = String::new();
@@ -33,16 +52,18 @@ fn format_missing_field_error(
     entry: &DiagnosticEntry,
     field_info: &crate::cgp_patterns::FieldInfo,
 ) {
+    let formatted_field_name = format_field_name(&field_info.field_name);
+
     // Header message
     if field_info.is_complete {
         output.push_str(&format!(
             "missing field `{}` required by CGP component\n",
-            field_info.field_name
+            formatted_field_name
         ));
     } else {
         output.push_str(&format!(
             "missing field `{}` (possibly incomplete) required by CGP component\n",
-            field_info.field_name
+            formatted_field_name
         ));
     }
 
@@ -71,20 +92,25 @@ fn format_missing_field_error(
         output.push_str("   |\n");
     }
 
+    // Note about unknown characters if present
+    if field_info.has_unknown_chars {
+        output.push_str("   = note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'\n");
+    }
+
     // Help message
     if entry.has_other_hasfield_impls {
         // The struct has derived HasField (we can see other field implementations)
         // So the field is truly missing
         output.push_str(&format!(
             "   = help: the struct `{}` is missing the required field `{}`\n",
-            field_info.target_type, field_info.field_name
+            field_info.target_type, formatted_field_name
         ));
     } else {
         // The struct has no HasField implementations visible
         // Either the field is missing OR the struct needs #[derive(HasField)]
         output.push_str(&format!(
             "   = help: the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`\n",
-            field_info.target_type, field_info.field_name
+            field_info.target_type, formatted_field_name
         ));
     }
 
@@ -112,12 +138,12 @@ fn format_missing_field_error(
     if entry.has_other_hasfield_impls {
         output.push_str(&format!(
             "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct\n",
-            field_info.field_name, field_info.target_type
+            formatted_field_name, field_info.target_type
         ));
     } else {
         output.push_str(&format!(
             "   = help: ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive\n",
-            field_info.field_name, field_info.target_type
+            formatted_field_name, field_info.target_type
         ));
     }
 }

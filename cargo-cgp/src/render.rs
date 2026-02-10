@@ -1,13 +1,20 @@
 use cargo_metadata::Message;
 
-use crate::render_compiler_message::render_compiler_message;
+use crate::cgp_patterns::is_cgp_diagnostic;
+use crate::diagnostic_db::DiagnosticDatabase;
 
-pub fn render_message(message: &Message) {
+pub fn render_message(message: &Message, db: &mut DiagnosticDatabase) {
     match message {
         Message::CompilerMessage(msg) => {
-            // Use the rendered field which contains the formatted diagnostic
-            if let Ok(rendered) = render_compiler_message(msg) {
-                println!("{}", rendered);
+            // Check if this is a CGP-related error
+            if is_cgp_diagnostic(&msg.message) {
+                // Add to database for later processing, don't render yet
+                db.add_diagnostic(&msg.message);
+            } else {
+                // Non-CGP error: render immediately using the original rendered field
+                if let Some(rendered) = &msg.message.rendered {
+                    println!("{}", rendered);
+                }
             }
         }
         Message::CompilerArtifact(artifact) => {
