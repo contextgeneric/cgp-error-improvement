@@ -1,3 +1,4 @@
+pub mod cgp_diagnostic;
 pub mod cgp_patterns;
 pub mod diagnostic_db;
 pub mod error_formatting;

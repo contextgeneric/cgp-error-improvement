@@ -4,6 +4,7 @@ use cargo_metadata::diagnostic::{Diagnostic, DiagnosticLevel, DiagnosticSpan};
 use cargo_metadata::{CompilerMessage, PackageId, Target};
 use std::collections::HashMap;
 
+use crate::cgp_diagnostic::CgpDiagnostic;
 use crate::cgp_patterns::{
     ComponentInfo, FieldInfo, ProviderRelationship, extract_component_info, extract_consumer_trait,
     extract_field_info, extract_provider_relationship, has_other_hasfield_implementations,
@@ -309,7 +310,7 @@ impl DiagnosticDatabase {
     /// Render all CGP error messages as CgpDiagnostic objects
     /// This should be called after all diagnostics have been collected
     /// Returns a vector of CgpDiagnostic objects with improved CGP diagnostics
-    pub fn render_cgp_diagnostics(&mut self) -> Vec<crate::error_formatting::CgpDiagnostic> {
+    pub fn render_cgp_diagnostics(&mut self) -> Vec<CgpDiagnostic> {
         use crate::error_formatting::format_error_message;
 
         // Get all active (non-suppressed) entries

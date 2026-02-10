@@ -1,68 +1,12 @@
-/// Module for formatting improved error messages from diagnostic entries
-/// This implements the approach described in Chapters 10-11 of the report
+use miette::{
+    GraphicalReportHandler, LabeledSpan, NamedSource, NarratableReportHandler, SourceOffset,
+    SourceSpan,
+};
+
+use crate::cgp_diagnostic::CgpDiagnostic;
 use crate::cgp_patterns::{derive_provider_trait_name, strip_module_prefixes};
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
-use miette::{
-    Diagnostic, GraphicalReportHandler, LabeledSpan, NamedSource, NarratableReportHandler,
-    SourceOffset, SourceSpan,
-};
-use std::fmt;
-
-/// A CGP-aware diagnostic that implements miette's Diagnostic trait
-#[derive(Debug, Clone)]
-pub struct CgpDiagnostic {
-    /// The main error message
-    message: String,
-    /// Error code (e.g., "E0277")
-    code: Option<String>,
-    /// Help text with suggestions
-    help: Option<String>,
-    /// Source code with file name
-    source_code: Option<NamedSource<String>>,
-    /// Labeled spans for highlighting
-    labels: Vec<LabeledSpan>,
-}
-
-impl fmt::Display for CgpDiagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl std::error::Error for CgpDiagnostic {}
-
-impl Diagnostic for CgpDiagnostic {
-    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        self.code
-            .as_ref()
-            .map(|c| Box::new(c.clone()) as Box<dyn fmt::Display>)
-    }
-
-    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        self.help
-            .as_ref()
-            .map(|h| Box::new(h.clone()) as Box<dyn fmt::Display>)
-    }
-
-    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
-        self.source_code
-            .as_ref()
-            .map(|s| s as &dyn miette::SourceCode)
-    }
-
-    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
-        if self.labels.is_empty() {
-            None
-        } else {
-            Some(Box::new(self.labels.clone().into_iter()))
-        }
-    }
-
-    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
-        None // We'll add related diagnostics through help/notes text
-    }
-}
 
 /// Checks if a field name contains non-basic identifier characters
 /// Basic identifier characters are: a-z, A-Z, 0-9, underscore, hyphen, and the replacement character
