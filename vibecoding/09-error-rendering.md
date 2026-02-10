@@ -58,3 +58,13 @@ Ensure that the output is really improved, such as all CGP error messages are fo
 ## Planning
 
 Before you start, write a detailed plan on the changes you are going to make in your response.
+
+# Follow Up
+
+You are not using `miette` to display the errors on terminal correctly. First, both colourful and plain text errors must be rendered through the same data structure through `miette`. The only difference between the two is one has terminal escape characters to provide color, and the other only use miette to display plain text.
+
+The errors displayed through `miette` should be the same CGP error messages that we have worked hard to render. Do not use `miette` to render the original error messages.
+
+You should remove all existing ad hoc error rendering code, and replace them to use miette. You must ensure that the error messages rendered for both color and plain text mode go through the same code path, and produce the same textual content.
+
+You should also ensure that the miette color mode is enabled when running cargo-cgp from the terminal.
