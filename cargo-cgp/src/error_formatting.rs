@@ -3,6 +3,9 @@
 use crate::cgp_patterns::{derive_provider_trait_name, strip_module_prefixes};
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
+use miette::{Diagnostic, LabeledSpan, NamedSource, SourceCode};
+use std::error::Error;
+use std::fmt;
 
 /// Checks if a field name contains non-basic identifier characters
 /// Basic identifier characters are: a-z, A-Z, 0-9, underscore, hyphen, and the replacement character
@@ -371,6 +374,185 @@ fn find_matching_bracket(start_pos: usize, text: &str) -> Option<usize> {
     }
 
     None
+}
+
+/// A CGP diagnostic that can be rendered using miette
+pub struct CgpDiagnostic {
+    /// The diagnostic entry with all extracted information
+    entry: DiagnosticEntry,
+    /// Source code for the primary span
+    source_code: Option<NamedSource<String>>,
+    /// Error message
+    message: String,
+    /// Help messages
+    help_messages: Vec<String>,
+}
+
+impl CgpDiagnostic {
+    /// Create a new CgpDiagnostic from a DiagnosticEntry
+    pub fn from_entry(entry: DiagnosticEntry) -> Self {
+        let (message, help_messages) = build_diagnostic_message(&entry);
+
+        // Extract source code if we have a primary span with text
+        let source_code = entry.primary_span.as_ref().and_then(|span| {
+            if !span.text.is_empty() {
+                let source_text = span
+                    .text
+                    .iter()
+                    .map(|line| line.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Some(NamedSource::new(&span.file_name, source_text))
+            } else {
+                None
+            }
+        });
+
+        Self {
+            entry,
+            source_code,
+            message,
+            help_messages,
+        }
+    }
+
+    /// Check if running in a TTY (terminal) environment
+    pub fn is_tty() -> bool {
+        use std::io::IsTerminal;
+        std::io::stderr().is_terminal()
+    }
+
+    /// Render this diagnostic using miette's formatting
+    /// For now, this uses the plain text formatter
+    /// TODO: Enhance with full miette graphical rendering
+    pub fn render(&self) -> String {
+        // For now, use the plain text formatter
+        // In the future, we can enhance this with full miette rendering
+        format_error_message(&self.entry)
+    }
+}
+
+impl fmt::Display for CgpDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl fmt::Debug for CgpDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl Error for CgpDiagnostic {}
+
+impl Diagnostic for CgpDiagnostic {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        self.entry
+            .error_code
+            .as_ref()
+            .map(|code| Box::new(code.clone()) as Box<dyn fmt::Display>)
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        if self.help_messages.is_empty() {
+            None
+        } else {
+            Some(Box::new(self.help_messages.join("\n")))
+        }
+    }
+
+    fn source_code(&self) -> Option<&dyn SourceCode> {
+        self.source_code.as_ref().map(|s| s as &dyn SourceCode)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        self.entry.primary_span.as_ref().map(|span| {
+            let label = span
+                .label
+                .clone()
+                .unwrap_or_else(|| "error occurs here".to_string());
+            let labeled_span = LabeledSpan::new_with_span(
+                Some(label),
+                (
+                    span.byte_start as usize,
+                    span.byte_end as usize - span.byte_start as usize,
+                ),
+            );
+            Box::new(std::iter::once(labeled_span)) as Box<dyn Iterator<Item = LabeledSpan>>
+        })
+    }
+}
+
+/// Build the main diagnostic message and help messages from the entry
+fn build_diagnostic_message(entry: &DiagnosticEntry) -> (String, Vec<String>) {
+    let mut help_messages = Vec::new();
+    let formatted_field_name = entry
+        .field_info
+        .as_ref()
+        .map(|fi| format_field_name(&fi.field_name));
+
+    let main_message = if let Some(field_info) = &entry.field_info {
+        let field_str = formatted_field_name.as_ref().unwrap();
+        if field_info.is_complete {
+            format!("missing field `{}` required by CGP component", field_str)
+        } else {
+            format!(
+                "missing field `{}` (possibly incomplete) required by CGP component",
+                field_str
+            )
+        }
+    } else {
+        entry.message.clone()
+    };
+
+    // Build help messages
+    if let Some(field_info) = &entry.field_info {
+        let field_str = formatted_field_name.as_ref().unwrap();
+
+        if field_info.has_unknown_chars {
+            help_messages.push("some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'".to_string());
+        }
+
+        if entry.has_other_hasfield_impls {
+            help_messages.push(format!(
+                "the struct `{}` is missing the required field `{}`",
+                field_info.target_type, field_str
+            ));
+        } else {
+            help_messages.push(format!(
+                "the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`",
+                field_info.target_type, field_str
+            ));
+        }
+
+        if let Some(consumer_trait) = &entry.consumer_trait {
+            help_messages.push(format!(
+                "this field is required by the trait bound `{}`",
+                consumer_trait
+            ));
+        }
+
+        if !entry.delegation_notes.is_empty() {
+            let simplified_notes = simplify_delegation_chain(entry);
+            let chain = simplified_notes.join("; ");
+            help_messages.push(format!("delegation chain: {}", chain));
+        }
+
+        if entry.has_other_hasfield_impls {
+            help_messages.push(format!(
+                "ensure a field `{}` of the appropriate type is present in the `{}` struct",
+                field_str, field_info.target_type
+            ));
+        } else {
+            help_messages.push(format!(
+                "ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive",
+                field_str, field_info.target_type
+            ));
+        }
+    }
+
+    (main_message, help_messages)
 }
 
 #[cfg(test)]

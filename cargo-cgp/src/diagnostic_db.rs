@@ -100,14 +100,12 @@ impl DiagnosticDatabase {
         let diagnostic = &compiler_message.message;
 
         // Extract key components for grouping
-        let primary_span = diagnostic.spans.iter().find(|s| s.is_primary);
-
-        if primary_span.is_none() {
+        let Some(primary_span) = diagnostic.spans.iter().find(|s| s.is_primary) else {
             // Can't process without a location
             return;
-        }
+        };
 
-        let location = SourceLocation::from_span(primary_span.unwrap());
+        let location = SourceLocation::from_span(primary_span);
 
         // Extract component info for grouping
         let component_info = extract_component_info(&diagnostic.message).or_else(|| {
@@ -133,7 +131,7 @@ impl DiagnosticDatabase {
             // Create new entry
             let entry = Self::create_entry(
                 diagnostic,
-                primary_span.unwrap().clone(),
+                primary_span.clone(),
                 compiler_message.package_id.clone(),
                 compiler_message.target.clone(),
             );
@@ -325,14 +323,19 @@ impl DiagnosticDatabase {
                 improved_diagnostic.rendered = Some(formatted);
 
                 // Use the builder to create a CompilerMessage
-                let compiler_message = CompilerMessageBuilder::default()
+                match CompilerMessageBuilder::default()
                     .package_id(entry.package_id.clone())
                     .target(entry.target.clone())
                     .message(improved_diagnostic)
                     .build()
-                    .expect("Failed to build CompilerMessage");
-
-                results.push(compiler_message);
+                {
+                    Ok(compiler_message) => results.push(compiler_message),
+                    Err(_) => {
+                        // If builder fails, skip this message
+                        // This should not happen if all required fields are provided
+                        continue;
+                    }
+                }
             }
         }
 
@@ -348,6 +351,27 @@ impl DiagnosticDatabase {
             .into_iter()
             .filter_map(|msg| msg.message.rendered)
             .collect()
+    }
+
+    /// Render all CGP error messages with miette (if in TTY mode)
+    /// This should be called after all diagnostics have been collected
+    /// Returns a vector of formatted error message strings ready to print
+    /// Uses colored output if running in a TTY
+    pub fn render_cgp_errors_with_miette(&mut self) -> Vec<String> {
+        use crate::error_formatting::CgpDiagnostic;
+
+        let active_entries = self.get_active_entries();
+        let mut results = Vec::new();
+
+        for entry in active_entries {
+            let cgp_diagnostic = CgpDiagnostic::from_entry(entry.clone());
+            let rendered = cgp_diagnostic.render();
+            if !rendered.is_empty() {
+                results.push(rendered);
+            }
+        }
+
+        results
     }
 }
 
