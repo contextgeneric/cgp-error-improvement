@@ -295,52 +295,6 @@ impl DiagnosticDatabase {
         notes
     }
 
-    /// Apply deduplication and suppression logic (private, called internally)
-    fn apply_suppression(&mut self) {
-        // Find entries that should be suppressed
-        let mut keys_to_suppress = Vec::new();
-
-        for (key, entry) in &self.entries {
-            // An error should be suppressed only if:
-            // 1. There's another entry at the same location with field info (more specific)
-            // 2. And this entry has no meaningful information beyond generic trait bounds
-
-            // Check if there's another entry at the same location with field info
-            if entry.field_info.is_none() {
-                if let Some(_related_key) = self.find_related_with_field_info(key) {
-                    // There's a more specific error at the same location
-                    // Suppress this one only if it doesn't have additional useful info
-                    let has_useful_delegation_info = !entry.delegation_notes.is_empty()
-                        || !entry.provider_relationships.is_empty();
-
-                    if !has_useful_delegation_info {
-                        keys_to_suppress.push(key.clone());
-                    }
-                }
-            }
-        }
-
-        // Mark suppressed entries
-        for key in keys_to_suppress {
-            if let Some(entry) = self.entries.get_mut(&key) {
-                entry.suppressed = true;
-            }
-        }
-    }
-
-    /// Find a related entry that has field information
-    fn find_related_with_field_info(&self, key: &DiagnosticKey) -> Option<DiagnosticKey> {
-        for (other_key, other_entry) in &self.entries {
-            // Check if locations are the same
-            if other_key.location == key.location {
-                if other_entry.field_info.is_some() {
-                    return Some(other_key.clone());
-                }
-            }
-        }
-        None
-    }
-
     /// Get all non-suppressed entries
     pub fn get_active_entries(&self) -> Vec<&DiagnosticEntry> {
         self.entries.values().filter(|e| !e.suppressed).collect()
@@ -357,9 +311,6 @@ impl DiagnosticDatabase {
     pub fn render_compiler_messages(&mut self) -> Vec<CompilerMessage> {
         use crate::error_formatting::format_error_message;
         use cargo_metadata::CompilerMessageBuilder;
-
-        // Apply suppression first
-        self.apply_suppression();
 
         // Get all active (non-suppressed) entries
         let active_entries = self.get_active_entries();
