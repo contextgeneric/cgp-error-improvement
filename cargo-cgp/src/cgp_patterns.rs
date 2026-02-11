@@ -63,6 +63,18 @@ pub struct ProviderRelationship {
     pub context: String,
 }
 
+/// Information about an unsatisfied provider trait bound
+/// Pattern: "the trait bound `Provider: ProviderTrait<Context>` is not satisfied"
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UnsatisfiedProviderTrait {
+    /// The provider type that doesn't implement the trait
+    pub provider_type: String,
+    /// The provider trait that is not implemented
+    pub provider_trait: String,
+    /// The context type
+    pub context: String,
+}
+
 /// Extracts component information from CanUseComponent patterns
 /// Pattern: `CanUseComponent<ComponentType>`
 pub fn extract_component_from_can_use(message: &str) -> Option<ComponentInfo> {
@@ -295,6 +307,46 @@ pub fn extract_provider_relationship(message: &str) -> Option<ProviderRelationsh
     })
 }
 
+/// Extracts unsatisfied provider trait bound from error messages
+/// Pattern: "the trait bound `Provider: ProviderTrait<Context>` is not satisfied"
+/// This occurs when a provider doesn't implement the required provider trait,
+/// typically in transitive dependency chains.
+pub fn extract_unsatisfied_provider_trait(message: &str) -> Option<UnsatisfiedProviderTrait> {
+    // Look for the pattern "the trait bound `...` is not satisfied"
+    if !message.contains("the trait bound") || !message.contains("is not satisfied") {
+        return None;
+    }
+
+    // Extract the content between ` marks
+    let start = message.find("the trait bound `")?;
+    let after_start = start + "the trait bound `".len();
+    let end = message[after_start..].find("` is not satisfied")?;
+    let bound_str = &message[after_start..after_start + end];
+
+    // Parse the bound: "Provider: ProviderTrait<Context>"
+    // Split on ": " to separate provider from trait
+    let colon_pos = bound_str.find(": ")?;
+    let provider_type = strip_module_prefixes(bound_str[..colon_pos].trim());
+
+    // Extract trait and context from "ProviderTrait<Context>"
+    let trait_part = &bound_str[colon_pos + 2..].trim();
+
+    // Find the opening bracket for the generic parameter
+    let bracket_start = trait_part.find('<')?;
+    let provider_trait = strip_module_prefixes(trait_part[..bracket_start].trim());
+
+    // Extract context from between < and >
+    let after_bracket = bracket_start + 1;
+    let context = extract_balanced_generic(trait_part, after_bracket)
+        .map(|s| strip_module_prefixes(&s))?;
+
+    Some(UnsatisfiedProviderTrait {
+        provider_type,
+        provider_trait,
+        context,
+    })
+}
+
 /// Extracts type from "for `Type` to implement" pattern
 fn extract_type_from_for_to_implement(message: &str) -> Option<String> {
     let start = message.find("for `")?;
@@ -440,5 +492,26 @@ mod tests {
         // Hidden characters are shown as �
         assert_eq!(chars2, vec!['w', 'i', 'd', '\u{FFFD}', 'h']);
         assert!(has_unknown2);
+    }
+
+    #[test]
+    fn test_extract_unsatisfied_provider_trait() {
+        let message = "the trait bound `RectangleArea: AreaCalculator<Rectangle>` is not satisfied";
+        let result = extract_unsatisfied_provider_trait(message);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.provider_type, "RectangleArea");
+        assert_eq!(info.provider_trait, "AreaCalculator");
+        assert_eq!(info.context, "Rectangle");
+
+        // Test with module prefix
+        let message2 =
+            "the trait bound `cgp::ScaledArea<RectangleArea>: cgp::AreaCalculator<Rectangle>` is not satisfied";
+        let result2 = extract_unsatisfied_provider_trait(message2);
+        assert!(result2.is_some());
+        let info2 = result2.unwrap();
+        assert_eq!(info2.provider_type, "ScaledArea<RectangleArea>");
+        assert_eq!(info2.provider_trait, "AreaCalculator");
+        assert_eq!(info2.context, "Rectangle");
     }
 }
