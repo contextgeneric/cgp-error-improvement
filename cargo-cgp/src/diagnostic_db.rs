@@ -500,10 +500,9 @@ impl DiagnosticDatabase {
                 {
                     for comp in components {
                         // Only add if it's not the same as one of our own components
-                        let is_own_component = entry
-                            .component_infos
-                            .iter()
-                            .any(|c| crate::cgp_patterns::strip_module_prefixes(&c.component_type) == *comp);
+                        let is_own_component = entry.component_infos.iter().any(|c| {
+                            crate::cgp_patterns::strip_module_prefixes(&c.component_type) == *comp
+                        });
 
                         if !is_own_component && !depends_on.contains(comp) {
                             depends_on.push(comp.clone());

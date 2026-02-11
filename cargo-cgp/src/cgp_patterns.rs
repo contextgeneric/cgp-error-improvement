@@ -552,7 +552,10 @@ mod tests {
             derive_component_from_consumer_trait("CanFoo"),
             Some("FooComponent".to_string())
         );
-        assert_eq!(derive_component_from_consumer_trait("NotAConsumerTrait"), None);
+        assert_eq!(
+            derive_component_from_consumer_trait("NotAConsumerTrait"),
+            None
+        );
     }
 
     #[test]
@@ -561,7 +564,10 @@ mod tests {
         let dep = extract_consumer_trait_dependency(note).unwrap();
         assert_eq!(dep.trait_name, "CanCalculateArea");
         assert_eq!(dep.context_type, "Rectangle");
-        assert_eq!(dep.component_name, Some("CalculateAreaComponent".to_string()));
+        assert_eq!(
+            dep.component_name,
+            Some("CalculateAreaComponent".to_string())
+        );
 
         // Should filter out internal traits
         let note2 = "required for `Rectangle` to implement `CanUseComponent<Something>`";

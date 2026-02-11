@@ -442,7 +442,10 @@ fn render_dependency_tree(
         // Shared component: use special rendering to show it connects back to root
         // Pattern: "└─────└─" where first └─ connects to root, second └─ is the branch
         let special_branch = "└─────└─";
-        let mut line = format!("{}{} requires: {}", prefix, special_branch, node.description);
+        let mut line = format!(
+            "{}{} requires: {}",
+            prefix, special_branch, node.description
+        );
 
         // Add trait type annotation if present
         if let Some(ref trait_type) = node.trait_type {
@@ -538,10 +541,86 @@ fn derive_component_from_consumer_trait(consumer_trait: &str) -> Option<String> 
     }
 }
 
+/// Matches a component to its specific provider relationship from the error
+/// This is based on the IsProviderFor<Component, Context> notes in the diagnostics
+fn match_component_to_provider<'a>(
+    component_info: &ComponentInfo,
+    provider_relationships: &'a [ProviderRelationship],
+) -> Option<&'a ProviderRelationship> {
+    let component_name = strip_module_prefixes(&component_info.component_type);
+
+    // Try exact match first
+    for rel in provider_relationships {
+        if strip_module_prefixes(&rel.component) == component_name {
+            return Some(rel);
+        }
+    }
+
+    // If no exact match, try matching by provider trait name
+    // The provider trait should be derivable from the component name
+    if let Some(ref provider_trait) = component_info.provider_trait {
+        for rel in provider_relationships {
+            // Check if this relationship's component derives the same provider trait
+            if let Some(rel_provider_trait) = derive_provider_trait_name(&rel.component) {
+                if rel_provider_trait == *provider_trait {
+                    return Some(rel);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Checks if a component has consumer trait dependencies that match other components
+/// Returns true if the component depends on other checked components via consumer traits
+fn component_has_nested_component_dependencies(
+    component_info: &ComponentInfo,
+    all_components: &[ComponentInfo],
+    consumer_trait_dependencies: &[crate::cgp_patterns::ConsumerTraitDependency],
+) -> bool {
+    // Check if any consumer trait dependency maps to another component's provider trait
+    for consumer_dep in consumer_trait_dependencies {
+        // Try to match this consumer trait to any other component's provider trait
+        let consumer_words: Vec<&str> = consumer_dep
+            .trait_name
+            .strip_prefix("Can")
+            .unwrap_or(&consumer_dep.trait_name)
+            .split(|c: char| c.is_uppercase())
+            .filter(|s| !s.is_empty() && s.len() > 2)
+            .collect();
+
+        for other_comp in all_components {
+            // Skip self
+            if other_comp.component_type == component_info.component_type {
+                continue;
+            }
+
+            // Check if this other component's provider trait matches the consumer trait
+            if let Some(ref provider_trait) = other_comp.provider_trait {
+                let provider_words: Vec<&str> = provider_trait
+                    .split(|c: char| c.is_uppercase())
+                    .filter(|s| !s.is_empty() && s.len() > 2)
+                    .collect();
+
+                // Check if they share significant words (same logic as nested consumer matching)
+                for consumer_word in &consumer_words {
+                    for provider_word in &provider_words {
+                        if consumer_word.eq_ignore_ascii_case(provider_word) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
 /// Builds a dependency tree from delegation notes and provider relationships
-/// When there are multiple components, builds a combined tree showing all paths
-/// If one component depends on another, only shows the tree for the dependent component
-/// and nests the dependency within it with special rendering
+/// When there are multiple components, if one depends on another via consumer traits,
+/// only shows the dependent component with the dependency nested within it
 fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
     // Build root node from check trait
     let check_trait = entry.check_trait.as_ref()?;
@@ -562,162 +641,153 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
         children: Vec::new(),
     };
 
-    // If we have component dependencies, only show the tree for components that have dependencies
-    // This avoids duplication when one component depends on another
-    // The logic: if we have multiple components with dependencies, show the one that appears LAST
-    // in the source code, as that's typically the more complex dependent component
-    let components_to_show: Vec<&ComponentInfo> = if entry.component_infos.len() > 1
-        && !entry.consumer_trait_dependencies.is_empty()
-    {
-        // Multiple components with consumer trait dependencies - show only the last one
-        // The last component in check_components! is typically the more complex one
-        // that depends on earlier components
-        if let Some(last_component) = entry.component_infos.last() {
-            vec![last_component]
-        } else {
-            entry.component_infos.iter().collect()
+    // When we have multiple components, check if any has consumer trait dependencies on other components
+    // If so, only show that component (the dependent one) with others nested within
+    if entry.component_infos.len() > 1 && !entry.consumer_trait_dependencies.is_empty() {
+        // Match each component to its provider and check for nested component dependencies
+        let mut components_with_nested: Vec<(&ComponentInfo, &ProviderRelationship)> = Vec::new();
+        let mut components_without_nested: Vec<(&ComponentInfo, &ProviderRelationship)> =
+            Vec::new();
+
+        for component_info in &entry.component_infos {
+            if let Some(provider_rel) =
+                match_component_to_provider(component_info, &entry.provider_relationships)
+            {
+                if component_has_nested_component_dependencies(
+                    component_info,
+                    &entry.component_infos,
+                    &entry.consumer_trait_dependencies,
+                ) {
+                    components_with_nested.push((component_info, provider_rel));
+                } else {
+                    components_without_nested.push((component_info, provider_rel));
+                }
+            }
         }
-    } else {
-        // Show all components if there are no complex dependencies
-        entry.component_infos.iter().collect()
-    };
 
-    // Add consumer trait level(s) - one for each component to show
-    for component_info in components_to_show {
-        let component_name = strip_module_prefixes(&component_info.component_type);
-        let consumer_desc = format!(
-            "consumer trait of `{}` for `{}`",
-            component_name, context_type
-        );
-
-        let mut consumer_node = DependencyNode {
-            description: consumer_desc,
-            trait_type: Some("consumer trait".to_string()),
-            is_satisfied: None,
-            is_shared_component: false,
-            children: Vec::new(),
+        // If we have components with nested dependencies, only show those
+        // Components without nested dependencies will be shown as shared components within the tree
+        let components_to_show = if !components_with_nested.is_empty() {
+            components_with_nested
+        } else {
+            // If no component has nested dependencies, show all
+            entry
+                .component_infos
+                .iter()
+                .filter_map(|comp| {
+                    match_component_to_provider(comp, &entry.provider_relationships)
+                        .map(|rel| (comp, rel))
+                })
+                .collect()
         };
 
-        // Add provider level(s) for this component
-        let provider_nodes =
-            build_provider_nodes_for_component(entry, &context_type, Some(component_info));
-        consumer_node.children = provider_nodes;
+        for (component_info, provider_rel) in components_to_show {
+            let component_name = strip_module_prefixes(&component_info.component_type);
+            let consumer_desc = format!(
+                "consumer trait of `{}` for `{}`",
+                component_name, context_type
+            );
 
-        root.children.push(consumer_node);
+            let mut consumer_node = DependencyNode {
+                description: consumer_desc,
+                trait_type: Some("consumer trait".to_string()),
+                is_satisfied: None,
+                is_shared_component: false,
+                children: Vec::new(),
+            };
 
-        // If this component has consumer trait dependencies, add them as siblings
-        // with special rendering to show they're shared dependencies
-        for consumer_dep in &entry.consumer_trait_dependencies {
-            // Check if this consumer trait might be provided by another component
-            let is_shared = entry.component_infos.len() > 1 && consumer_dep.component_name.is_some();
+            // Build provider node for this specific relationship
+            let provider_nodes = build_provider_nodes_for_component(
+                entry,
+                &context_type,
+                Some(component_info),
+                Some(provider_rel),
+            );
+            consumer_node.children = provider_nodes;
 
-            if is_shared {
-                // Add as a sibling with special rendering
-                let shared_consumer_desc = format!(
-                    "{} for {}",
-                    consumer_dep.trait_name, consumer_dep.context_type
+            root.children.push(consumer_node);
+        }
+    } else {
+        // Single component or no consumer trait dependencies - show all components normally
+        for component_info in &entry.component_infos {
+            let component_name = strip_module_prefixes(&component_info.component_type);
+            let consumer_desc = format!(
+                "consumer trait of `{}` for `{}`",
+                component_name, context_type
+            );
+
+            let mut consumer_node = DependencyNode {
+                description: consumer_desc,
+                trait_type: Some("consumer trait".to_string()),
+                is_satisfied: None,
+                is_shared_component: false,
+                children: Vec::new(),
+            };
+
+            // Match this component to its specific provider relationship
+            if let Some(provider_rel) =
+                match_component_to_provider(component_info, &entry.provider_relationships)
+            {
+                // Build provider node for this specific relationship
+                let provider_nodes = build_provider_nodes_for_component(
+                    entry,
+                    &context_type,
+                    Some(component_info),
+                    Some(provider_rel),
                 );
-
-                let mut shared_consumer_node = DependencyNode {
-                    description: shared_consumer_desc,
-                    trait_type: Some("consumer trait".to_string()),
-                    is_satisfied: None,
-                    is_shared_component: true, // Mark as shared
-                    children: Vec::new(),
-                };
-
-                // Add getter requirements for the shared component
-                let getter_children = build_getter_nodes(entry, &context_type);
-                shared_consumer_node.children.extend(getter_children);
-
-                root.children.push(shared_consumer_node);
+                consumer_node.children = provider_nodes;
+            } else {
+                // Fallback: build without specific provider relationship
+                let provider_nodes = build_provider_nodes_for_component(
+                    entry,
+                    &context_type,
+                    Some(component_info),
+                    None,
+                );
+                consumer_node.children = provider_nodes;
             }
+
+            root.children.push(consumer_node);
         }
     }
 
     // If no component info, try building without it (fallback)
     if entry.component_infos.is_empty() && !entry.provider_relationships.is_empty() {
-        let provider_nodes = build_provider_nodes_for_component(entry, &context_type, None);
+        let provider_nodes = build_provider_nodes_for_component(entry, &context_type, None, None);
         root.children.extend(provider_nodes);
     }
 
     Some(root)
 }
 
-/// Builds provider nodes for a specific component
+/// Builds provider nodes for a specific component and its provider relationship
 /// If component_info is None, builds nodes based on provider relationships alone
+/// If provider_rel is provided, uses that specific relationship; otherwise uses first available
 fn build_provider_nodes_for_component(
     entry: &DiagnosticEntry,
     context_type: &str,
     component_info: Option<&ComponentInfo>,
+    provider_rel: Option<&ProviderRelationship>,
 ) -> Vec<DependencyNode> {
-    let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
-    let all_inner_providers = detect_inner_providers(&entry.provider_relationships);
-
     let mut provider_nodes = Vec::new();
 
-    // Find outer provider (if exists)
-    let outer_providers: Vec<_> = deduped_relationships
-        .iter()
-        .filter(|r| {
-            !all_inner_providers
+    // Determine which provider relationship to use
+    let all_inner_providers = detect_inner_providers(&entry.provider_relationships);
+    let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
+
+    let rel_to_use = if let Some(rel) = provider_rel {
+        Some(rel)
+    } else {
+        deduped_relationships.first()
+    };
+
+    if let Some(rel) = rel_to_use {
+        if let Some(provider_trait) = component_info.and_then(|c| c.provider_trait.clone()) {
+            // Check if this is a higher-order provider (has inner providers)
+            let is_higher_order = all_inner_providers
                 .iter()
-                .any(|inner| inner == &r.provider_type)
-        })
-        .collect();
+                .any(|inner| is_contained_type_parameter(inner, &rel.provider_type));
 
-    if let Some(outer_rel) = outer_providers.first() {
-        // This is a higher-order provider
-        if let Some(provider_trait) = component_info.and_then(|c| c.provider_trait.clone()) {
-            let description = format!(
-                "{}<{}> for provider {}",
-                provider_trait, context_type, outer_rel.provider_type
-            );
-            let mut outer_node = DependencyNode {
-                description: strip_module_prefixes(&description),
-                trait_type: Some("provider trait".to_string()),
-                is_satisfied: None,
-                is_shared_component: false,
-                children: Vec::new(),
-            };
-
-            // Add getter requirements and inner provider as children
-            let getter_children = build_getter_nodes(entry, context_type);
-            outer_node.children.extend(getter_children);
-
-            // Check for nested consumer trait dependencies (for outer providers too)
-            // But SKIP them if they will be shown as shared siblings at the root level
-            let should_show_nested_consumers = !(entry.component_infos.len() > 1);
-
-            if should_show_nested_consumers {
-                let nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
-                for nested_consumer in &nested_consumers {
-                    let nested_nodes = build_nested_consumer_provider_nodes(entry, nested_consumer);
-                    outer_node.children.extend(nested_nodes);
-                }
-            }
-
-            // Add inner provider node if exists
-            if let Some(inner_provider) = all_inner_providers.first() {
-                let inner_desc = format!(
-                    "{}<{}> for inner provider {}",
-                    provider_trait, context_type, inner_provider
-                );
-                let inner_node = DependencyNode {
-                    description: strip_module_prefixes(&inner_desc),
-                    trait_type: Some("provider trait".to_string()),
-                    is_satisfied: Some(true), // Inner is OK if outer has the error
-                    is_shared_component: false,
-                    children: Vec::new(),
-                };
-                outer_node.children.push(inner_node);
-            }
-
-            provider_nodes.push(outer_node);
-        }
-    } else if let Some(rel) = deduped_relationships.first() {
-        // Simple provider (no higher-order)
-        if let Some(provider_trait) = component_info.and_then(|c| c.provider_trait.clone()) {
             let description = format!(
                 "{}<{}> for provider {}",
                 provider_trait, context_type, rel.provider_type
@@ -730,21 +800,44 @@ fn build_provider_nodes_for_component(
                 children: Vec::new(),
             };
 
-            // Add getter requirements as children
-            let getter_children = build_getter_nodes(entry, context_type);
-            provider_node.children.extend(getter_children);
+            // Add nested consumer trait dependencies (transitive dependencies)
+            // These are consumer traits that this provider depends on
+            // When we have multiple components and are showing only one with dependencies,
+            // show all nested consumers (they've already been filtered at the tree level)
+            let all_nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
+            let has_nested_consumer_deps = !all_nested_consumers.is_empty();
 
-            // Check for nested consumer trait dependencies
-            // But SKIP them if they will be shown as shared siblings at the root level
-            // (i.e., if we have multiple components and this consumer trait has a component_name)
-            let should_show_nested_consumers = !(entry.component_infos.len() > 1);
+            // Add getter requirements as children (if this provider directly requires fields)
+            // Only add getters if there's no nested consumer trait (to avoid duplication)
+            if !has_nested_consumer_deps {
+                let getter_children = build_getter_nodes(entry, context_type);
+                provider_node.children.extend(getter_children);
+            }
 
-            if should_show_nested_consumers {
-                let nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
-                for nested_consumer in &nested_consumers {
-                    // Build nodes for the nested consumer + its unsatisfied provider
-                    let nested_nodes = build_nested_consumer_provider_nodes(entry, nested_consumer);
-                    provider_node.children.extend(nested_nodes);
+            // Add all nested consumer dependencies
+            for nested_consumer in &all_nested_consumers {
+                // Build nodes for the nested consumer + its provider tree
+                // Check if this maps to a checked component (shared dependency)
+                let nested_nodes =
+                    build_nested_consumer_provider_nodes(entry, nested_consumer, context_type);
+                provider_node.children.extend(nested_nodes);
+            }
+
+            // If this is a higher-order provider, add inner provider as info node
+            if is_higher_order {
+                if let Some(inner_provider) = all_inner_providers.first() {
+                    let inner_desc = format!(
+                        "{}<{}> for inner provider {}",
+                        provider_trait, context_type, inner_provider
+                    );
+                    let inner_node = DependencyNode {
+                        description: strip_module_prefixes(&inner_desc),
+                        trait_type: Some("provider trait".to_string()),
+                        is_satisfied: Some(true), // Inner is OK if outer has the error
+                        is_shared_component: false,
+                        children: Vec::new(),
+                    };
+                    provider_node.children.push(inner_node);
                 }
             }
 
@@ -802,20 +895,50 @@ fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depend
 ///
 /// For example: DensityFromMassField -> requires CanCalculateArea -> requires RectangleArea
 ///
-/// If the nested consumer maps to a component that this entry depends on,
+/// If the nested consumer maps to a component that this entry depends on (checked at root),
 /// we build the full tree for that component and mark it as a shared dependency.
 fn build_nested_consumer_provider_nodes(
     entry: &DiagnosticEntry,
     nested_consumer: &NestedConsumerTrait,
+    _parent_context_type: &str,
 ) -> Vec<DependencyNode> {
     let mut nodes = Vec::new();
 
-    // Check if this consumer trait maps to a component we depend on
-    let is_shared_component = if let Some(ref component_name) = nested_consumer.component_name {
-        entry.depends_on_components.contains(component_name)
-    } else {
+    // Check if this consumer trait maps to a checked component (appears in component_infos)
+    // We match by checking if the provider trait of any component matches this consumer trait
+    // For example: CanCalculateArea consumer trait → AreaCalculator provider trait
+    let matching_component = entry.component_infos.iter().find(|comp| {
+        if let Some(ref provider_trait) = comp.provider_trait {
+            // Extract the action/noun part from consumer trait (e.g., "CanCalculateArea" → "CalculateArea")
+            // and check if it matches the provider trait "AreaCalculator"
+            // This is a fuzzy match since the names follow similar patterns but aren't exact
+            if let Some(action_part) = nested_consumer.trait_name.strip_prefix("Can") {
+                // Both should contain similar words, just potentially in different order
+                // Simple heuristic: check if provider trait contains any significant word from action part
+                let action_words: Vec<&str> = action_part
+                    .split(|c: char| c.is_uppercase())
+                    .filter(|s| !s.is_empty() && s.len() > 2)
+                    .collect();
+
+                let provider_words: Vec<&str> = provider_trait
+                    .split(|c: char| c.is_uppercase())
+                    .filter(|s| !s.is_empty() && s.len() > 2)
+                    .collect();
+
+                // Check if they share significant words
+                for action_word in &action_words {
+                    for provider_word in &provider_words {
+                        if action_word.eq_ignore_ascii_case(provider_word) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
         false
-    };
+    });
+
+    let is_shared_component = matching_component.is_some();
 
     // Create a node for the nested consumer trait
     let consumer_desc = format!(
@@ -827,40 +950,44 @@ fn build_nested_consumer_provider_nodes(
         trait_type: Some("consumer trait".to_string()),
         is_satisfied: None,
         children: Vec::new(),
-        is_shared_component: false,
+        is_shared_component, // Mark if it's a shared component
     };
 
     if is_shared_component {
-        // This is a shared component dependency
-        // Instead of just showing the unsatisfied provider, build the full dependency tree
-        // But mark it as shared so it gets special rendering
-        
-        // Try to extract the unsatisfied provider from the main error message
-        if let Some(unsatisfied) = extract_unsatisfied_provider_from_message(&entry.message) {
-            // Create a provider node with getter children
-            let provider_desc = format!(
-                "{}<{}> for provider {}",
-                unsatisfied.trait_name, unsatisfied.context_type, unsatisfied.provider_type
-            );
+        // This is a shared component dependency that's also checked at root level
+        // Build the full provider tree for it, including getter and field requirements
 
-            let mut provider_node = DependencyNode {
-                description: strip_module_prefixes(&provider_desc),
-                trait_type: Some("provider trait".to_string()),
-                is_satisfied: None,
-                children: Vec::new(),
-                is_shared_component: false,
-            };
+        if let Some(component_info) = matching_component {
+            // Match this component to its provider relationship
+            if let Some(provider_rel) =
+                match_component_to_provider(component_info, &entry.provider_relationships)
+            {
+                if let Some(provider_trait) = component_info.provider_trait.clone() {
+                    let provider_desc = format!(
+                        "{}<{}> for provider {}",
+                        provider_trait, nested_consumer.context_type, provider_rel.provider_type
+                    );
 
-            // Add getter requirements from the entry
-            let getter_children = build_getter_nodes(entry, &nested_consumer.context_type);
-            provider_node.children.extend(getter_children);
+                    let mut provider_node = DependencyNode {
+                        description: strip_module_prefixes(&provider_desc),
+                        trait_type: Some("provider trait".to_string()),
+                        is_satisfied: None,
+                        children: Vec::new(),
+                        is_shared_component: false,
+                    };
 
-            // Mark as shared so rendering shows the connection back to root
-            consumer_node.is_shared_component = true;
-            consumer_node.children.push(provider_node);
+                    // Add getter requirements and field nodes for this provider
+                    // This ensures the full dependency tree is shown, including the missing field
+                    let getter_children = build_getter_nodes(entry, &nested_consumer.context_type);
+                    provider_node.children.extend(getter_children);
+
+                    consumer_node.children.push(provider_node);
+                }
+            }
         }
     } else {
-        // Not a shared component, just show the unsatisfied provider
+        // Not a shared component - this consumer trait is not checked at root
+        // Just show that it's not satisfied, don't build a full tree
         // Try to extract the unsatisfied provider from the main error message
         if let Some(unsatisfied) = extract_unsatisfied_provider_from_message(&entry.message) {
             // Create a provider node that's marked as unsatisfied
@@ -942,7 +1069,7 @@ fn extract_context_from_notes(notes: &[String]) -> Option<String> {
     None
 }
 
-/// Information about a nested consumer trait dependency
+/// Information about a nested consumer trait dependency extracted from delegation notes
 /// This represents a consumer trait that a provider depends on
 #[derive(Debug, Clone)]
 struct NestedConsumerTrait {
@@ -950,8 +1077,6 @@ struct NestedConsumerTrait {
     trait_name: String,
     /// The context type (e.g., "Rectangle")
     context_type: String,
-    /// The component that provides this consumer trait (if we can derive it)
-    component_name: Option<String>,
 }
 
 /// Extracts nested consumer trait dependencies from delegation notes
@@ -988,13 +1113,9 @@ fn extract_nested_consumer_traits(notes: &[String]) -> Vec<NestedConsumerTrait> 
                             && !cleaned_trait.contains("CanUseComponent")
                             && !cleaned_trait.starts_with("IsProviderFor")
                         {
-                            // Try to derive the component name from the consumer trait
-                            let component_name = derive_component_from_consumer_trait(&cleaned_trait);
-
                             results.push(NestedConsumerTrait {
                                 trait_name: cleaned_trait,
                                 context_type: strip_module_prefixes(context_type),
-                                component_name,
                             });
                         }
                     }
