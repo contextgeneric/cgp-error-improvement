@@ -75,6 +75,8 @@ delegate_components! {
     }
 }
 
+// Missing height field causes RectangleArea -> ScaledArea<RectangleArea> -> DensityFromMassField to fail
+
 check_components! {
     CanUseRectangle for Rectangle {
         DensityCalculatorComponent,
