@@ -69,7 +69,7 @@ fn test_base_area_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
+                └─ requires: consumer trait of `AreaCalculatorComponent` for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
                       └─ requires: HasRectangleFields for Rectangle (getter trait)
                          └─ requires: field `heig�t` on Rectangle ✗
@@ -112,7 +112,7 @@ fn test_base_area_2_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
+                └─ requires: consumer trait of `AreaCalculatorComponent` for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
                       └─ requires: HasRectangleFields for Rectangle (getter trait)
                          └─ requires: field `width` on Rectangle ✗
@@ -154,7 +154,7 @@ fn test_scaled_area_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
+                └─ requires: consumer trait of `AreaCalculatorComponent` for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider ScaledArea<RectangleArea> (provider trait)
                       ├─ requires: HasRectangleFields for Rectangle (getter trait)
                       │  └─ requires: field `height` on Rectangle ✗
@@ -191,7 +191,7 @@ fn test_scaled_area_2_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
+                └─ requires: consumer trait of `AreaCalculatorComponent` for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider ScaledArea<RectangleArea> (provider trait)
                       └─ requires: HasScaleFactor for Rectangle (getter trait)
                          └─ requires: field `scale_factor` on Rectangle ✗

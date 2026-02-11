@@ -255,17 +255,47 @@ impl DiagnosticDatabase {
     fn extract_component_info_from_diagnostic(diagnostic: &Diagnostic) -> Option<ComponentInfo> {
         // Try main message
         if let Some(info) = extract_component_info(&diagnostic.message) {
-            return Some(info);
+            // Check if the component_type is truncated (contains "...")
+            // If so, try to extract from span text instead
+            if !info.component_type.contains("...") {
+                return Some(info);
+            }
         }
 
         // Try all children
         for child in &diagnostic.children {
             if let Some(info) = extract_component_info(&child.message) {
+                if !info.component_type.contains("...") {
+                    return Some(info);
+                }
+            }
+        }
+
+        // If message-based extraction failed or returned truncated result,
+        // try to extract component name from the span text
+        if let Some(span) = diagnostic.spans.iter().find(|s| s.is_primary) {
+            if let Some(info) = Self::extract_component_info_from_span(span) {
                 return Some(info);
             }
         }
 
         None
+    }
+
+    /// Extract component info from the span's source text
+    /// This is used as a fallback when the compiler truncates type names in error messages
+    fn extract_component_info_from_span(span: &DiagnosticSpan) -> Option<ComponentInfo> {
+        // Concatenate all text lines from the span
+        let span_text: String = span
+            .text
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Extract component name from the span text
+        // The highlighted portion should contain something like "AreaCalculatorComponent"
+        extract_component_info(&span_text)
     }
 
     /// Extract check trait from diagnostic notes

@@ -455,12 +455,13 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
             extract_consumer_trait_from_notes(&entry.delegation_notes, &context_type)
                 .or_else(|| extract_consumer_trait_from_component(&component_info.component_type))
                 .unwrap_or_else(|| {
-                    // Derive from provider trait if available
-                    if let Some(ref provider_trait) = component_info.provider_trait {
-                        format!("{}<{}> for {}", provider_trait, context_type, context_type)
-                    } else {
-                        format!("consumer trait for {}", context_type)
-                    }
+                    // When consumer trait cannot be found, describe it using the component name
+                    // This is clearer than trying to use the provider trait name, which would be incorrect
+                    let component_name = strip_module_prefixes(&component_info.component_type);
+                    format!(
+                        "consumer trait of `{}` for {}",
+                        component_name, context_type
+                    )
                 });
 
         // Apply module prefix stripping to the final description
