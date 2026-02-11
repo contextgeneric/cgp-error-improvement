@@ -5,3 +5,4 @@ pub mod error_formatting;
 pub mod render;
 pub mod root_cause;
 pub mod run_check;
+pub mod test_utils;
