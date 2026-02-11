@@ -401,6 +401,81 @@ pub fn has_other_hasfield_implementations(diagnostic: &Diagnostic) -> bool {
     false
 }
 
+/// Information about a consumer trait dependency extracted from delegation notes
+/// This represents a consumer trait that a provider depends on
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConsumerTraitDependency {
+    /// The consumer trait name (e.g., "CanCalculateArea")
+    pub trait_name: String,
+    /// The context type (e.g., "Rectangle")
+    pub context_type: String,
+    /// The component that provides this consumer trait (if we can derive it)
+    pub component_name: Option<String>,
+}
+
+/// Extracts consumer trait dependencies from delegation notes
+/// These are consumer traits that providers depend on, shown in notes like:
+/// "required for `Rectangle` to implement `CanCalculateArea`"
+/// Returns None if the trait is not a consumer trait (e.g., internal CGP traits)
+pub fn extract_consumer_trait_dependency(note: &str) -> Option<ConsumerTraitDependency> {
+    // Look for pattern: "required for `Context` to implement `TraitName`"
+    // This indicates that the provider depends on this consumer trait
+    if let Some(for_pos) = note.find("required for `") {
+        let after_for = for_pos + "required for `".len();
+
+        // Extract context type (between first ` and next `)
+        if let Some(context_end) = note[after_for..].find('`') {
+            let context_type = &note[after_for..after_for + context_end];
+
+            // Look for the trait name after "to implement `"
+            if let Some(implement_pos) = note[after_for + context_end..].find("to implement `") {
+                let trait_start = after_for + context_end + implement_pos + "to implement `".len();
+
+                if let Some(trait_end) = note[trait_start..].find('`') {
+                    let trait_name = &note[trait_start..trait_start + trait_end];
+
+                    // Filter out internal CGP traits - we only want consumer traits
+                    // Consumer traits typically start with "Can" but exclude framework traits
+                    let cleaned_trait = strip_module_prefixes(trait_name);
+
+                    // Skip if it's an IsProviderFor or CanUseComponent trait (these are internal)
+                    if cleaned_trait.starts_with("Can")
+                        && !cleaned_trait.contains("CanUseComponent")
+                        && !cleaned_trait.starts_with("IsProviderFor")
+                    {
+                        // Try to derive the component name from the consumer trait
+                        let component_name = derive_component_from_consumer_trait(&cleaned_trait);
+
+                        return Some(ConsumerTraitDependency {
+                            trait_name: cleaned_trait,
+                            context_type: strip_module_prefixes(context_type),
+                            component_name,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Derives a component name from a consumer trait name
+/// E.g., "CanCalculateArea" -> "AreaCalculatorComponent"
+/// This is a heuristic that works for common CGP naming patterns:
+/// - Consumer trait: Can{Action} (e.g., CanCalculateArea)
+/// - Component: {Action}Component (e.g., AreaCalculatorComponent)
+pub fn derive_component_from_consumer_trait(consumer_trait: &str) -> Option<String> {
+    // Check if it starts with "Can"
+    if let Some(action_part) = consumer_trait.strip_prefix("Can") {
+        // Remove the "Can" prefix and append "Component"
+        // E.g., "CalculateArea" -> "AreaCalculatorComponent"
+        Some(format!("{}Component", action_part))
+    } else {
+        None
+    }
+}
+
 /// Removes all module prefixes from a message (e.g., "foo::bar::Baz" -> "Baz")
 pub fn strip_module_prefixes(message: &str) -> String {
     // This is a generic transformation - we don't hardcode specific module names
@@ -465,5 +540,31 @@ mod tests {
         // Hidden characters are shown as �
         assert_eq!(chars2, vec!['w', 'i', 'd', '\u{FFFD}', 'h']);
         assert!(has_unknown2);
+    }
+
+    #[test]
+    fn test_derive_component_from_consumer_trait() {
+        assert_eq!(
+            derive_component_from_consumer_trait("CanCalculateArea"),
+            Some("CalculateAreaComponent".to_string())
+        );
+        assert_eq!(
+            derive_component_from_consumer_trait("CanFoo"),
+            Some("FooComponent".to_string())
+        );
+        assert_eq!(derive_component_from_consumer_trait("NotAConsumerTrait"), None);
+    }
+
+    #[test]
+    fn test_extract_consumer_trait_dependency() {
+        let note = "required for `Rectangle` to implement `CanCalculateArea`";
+        let dep = extract_consumer_trait_dependency(note).unwrap();
+        assert_eq!(dep.trait_name, "CanCalculateArea");
+        assert_eq!(dep.context_type, "Rectangle");
+        assert_eq!(dep.component_name, Some("CalculateAreaComponent".to_string()));
+
+        // Should filter out internal traits
+        let note2 = "required for `Rectangle` to implement `CanUseComponent<Something>`";
+        assert!(extract_consumer_trait_dependency(note2).is_none());
     }
 }

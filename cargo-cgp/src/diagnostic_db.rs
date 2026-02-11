@@ -10,6 +10,18 @@ use crate::cgp_patterns::{
     extract_field_info, extract_provider_relationship, has_other_hasfield_implementations,
 };
 
+/// Derives a consumer trait name from a provider trait name
+/// This is a heuristic and may not always be accurate
+/// Provider: "AreaCalculator" -> Consumer: "CanCalculateArea"
+/// Provider: "DensityCalculator" -> Consumer: "CanCalculateDensity"
+fn derive_consumer_trait_from_provider(provider_trait: &str) -> String {
+    // Common pattern in CGP: Provider ends with action (e.g., "Calculator")
+    // Consumer trait is "Can" + action + noun
+    // But this is complex to reverse, so we'll just store the provider trait name
+    // for fuzzy matching later
+    provider_trait.to_string()
+}
+
 /// A database that collects and merges related diagnostic information
 #[derive(Debug, Default)]
 pub struct DiagnosticDatabase {
@@ -73,6 +85,14 @@ pub struct DiagnosticEntry {
 
     /// Delegation chain notes (raw, for later processing)
     pub delegation_notes: Vec<String>,
+
+    /// Consumer trait dependencies extracted from delegation notes
+    /// These are consumer traits that providers depend on
+    pub consumer_trait_dependencies: Vec<crate::cgp_patterns::ConsumerTraitDependency>,
+
+    /// Components that this component depends on (derived from consumer trait dependencies)
+    /// This is populated during the second pass after all diagnostics are collected
+    pub depends_on_components: Vec<String>,
 
     /// Whether this type has other HasField implementations
     pub has_other_hasfield_impls: bool,
@@ -181,6 +201,8 @@ impl DiagnosticDatabase {
         let provider_relationships =
             Self::extract_provider_relationships_from_diagnostic(diagnostic);
         let delegation_notes = Self::extract_delegation_notes(diagnostic);
+        let consumer_trait_dependencies =
+            Self::extract_consumer_trait_dependencies_from_diagnostic(diagnostic);
         let has_other_hasfield_impls = has_other_hasfield_implementations(diagnostic);
         let error_code = diagnostic.code.as_ref().map(|c| c.code.clone());
 
@@ -204,6 +226,8 @@ impl DiagnosticDatabase {
             check_trait,
             provider_relationships,
             delegation_notes,
+            consumer_trait_dependencies,
+            depends_on_components: Vec::new(), // Populated in second pass
             has_other_hasfield_impls,
             primary_spans: vec![primary_span],
             error_code,
@@ -274,6 +298,14 @@ impl DiagnosticDatabase {
             for note in new_notes {
                 if !existing.delegation_notes.contains(&note) {
                     existing.delegation_notes.push(note);
+                }
+            }
+
+            // Merge consumer trait dependencies
+            let new_consumer_deps = Self::extract_consumer_trait_dependencies_from_diagnostic(new);
+            for dep in new_consumer_deps {
+                if !existing.consumer_trait_dependencies.contains(&dep) {
+                    existing.consumer_trait_dependencies.push(dep);
                 }
             }
 
@@ -381,6 +413,25 @@ impl DiagnosticDatabase {
         notes
     }
 
+    /// Extract consumer trait dependencies from delegation notes
+    fn extract_consumer_trait_dependencies_from_diagnostic(
+        diagnostic: &Diagnostic,
+    ) -> Vec<crate::cgp_patterns::ConsumerTraitDependency> {
+        use crate::cgp_patterns::extract_consumer_trait_dependency;
+
+        let mut dependencies = Vec::new();
+
+        for child in &diagnostic.children {
+            if matches!(child.level, DiagnosticLevel::Note) {
+                if let Some(dep) = extract_consumer_trait_dependency(&child.message) {
+                    dependencies.push(dep);
+                }
+            }
+        }
+
+        dependencies
+    }
+
     /// Get all non-suppressed entries
     pub fn get_active_entries(&self) -> Vec<&DiagnosticEntry> {
         self.entries.values().filter(|e| !e.suppressed).collect()
@@ -391,11 +442,97 @@ impl DiagnosticDatabase {
         self.entries.values().collect()
     }
 
+    /// Second pass: resolve component dependencies
+    /// This should be called after all diagnostics have been added
+    /// It matches consumer trait dependencies to actual components in the list
+    pub fn resolve_component_dependencies(&mut self) {
+        // Build a map of component names that exist in our diagnostic set
+        let mut component_names: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        // Also build a map from consumer traits to components (based on provider traits)
+        let mut consumer_trait_to_component: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+
+        for entry in self.entries.values() {
+            for component_info in &entry.component_infos {
+                let component_name =
+                    crate::cgp_patterns::strip_module_prefixes(&component_info.component_type);
+                component_names.insert(component_name.clone());
+
+                // Map provider trait to component
+                // Provider trait "AreaCalculator" corresponds to consumer trait "CanCalculateArea"
+                // We can derive the consumer trait from the provider trait
+                if let Some(ref provider_trait) = component_info.provider_trait {
+                    // Try to derive consumer trait from provider trait
+                    // Pattern: Provider "XyzCalculator" -> Consumer "CanCalculateXyz"
+                    // But this is complex, so instead let's just store the component for fuzzy matching
+                    let consumer_trait = derive_consumer_trait_from_provider(provider_trait);
+                    consumer_trait_to_component
+                        .entry(consumer_trait)
+                        .or_default()
+                        .push(component_name.clone());
+                }
+            }
+        }
+
+        // Now populate depends_on_components for each entry
+        // We need to collect the updates first to avoid borrowing issues
+        let mut updates: Vec<(DiagnosticKey, Vec<String>)> = Vec::new();
+
+        for (key, entry) in &self.entries {
+            let mut depends_on = Vec::new();
+
+            for consumer_dep in &entry.consumer_trait_dependencies {
+                // Check if this consumer trait maps to any component in our set
+                // First try exact match with derived component name
+                if let Some(ref component_name) = consumer_dep.component_name {
+                    if component_names.contains(component_name) {
+                        if !depends_on.contains(component_name) {
+                            depends_on.push(component_name.clone());
+                        }
+                        continue;
+                    }
+                }
+
+                // Try fuzzy match - check if any component could satisfy this consumer trait
+                // by checking if the consumer trait matches what any component provides
+                if let Some(components) = consumer_trait_to_component.get(&consumer_dep.trait_name)
+                {
+                    for comp in components {
+                        // Only add if it's not the same as one of our own components
+                        let is_own_component = entry
+                            .component_infos
+                            .iter()
+                            .any(|c| crate::cgp_patterns::strip_module_prefixes(&c.component_type) == *comp);
+
+                        if !is_own_component && !depends_on.contains(comp) {
+                            depends_on.push(comp.clone());
+                        }
+                    }
+                }
+            }
+
+            if !depends_on.is_empty() {
+                updates.push((key.clone(), depends_on));
+            }
+        }
+
+        // Apply the updates
+        for (key, depends_on) in updates {
+            if let Some(entry) = self.entries.get_mut(&key) {
+                entry.depends_on_components = depends_on;
+            }
+        }
+    }
+
     /// Render all CGP error messages as CgpDiagnostic objects
     /// This should be called after all diagnostics have been collected
     /// Returns a vector of CgpDiagnostic objects with improved CGP diagnostics
     pub fn render_cgp_diagnostics(&mut self) -> Vec<CgpDiagnostic> {
         use crate::error_formatting::format_error_message;
+
+        // First, resolve component dependencies
+        self.resolve_component_dependencies();
 
         // Get all active (non-suppressed) entries
         let active_entries = self.get_active_entries();
