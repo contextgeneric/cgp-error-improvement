@@ -6,9 +6,8 @@ use std::collections::HashMap;
 
 use crate::cgp_diagnostic::CgpDiagnostic;
 use crate::cgp_patterns::{
-    ComponentInfo, FieldInfo, ProviderRelationship, UnsatisfiedProviderTrait, extract_check_trait,
-    extract_component_info, extract_field_info, extract_provider_relationship,
-    extract_unsatisfied_provider_trait, has_other_hasfield_implementations,
+    ComponentInfo, FieldInfo, ProviderRelationship, extract_check_trait, extract_component_info,
+    extract_field_info, extract_provider_relationship, has_other_hasfield_implementations,
 };
 
 /// A database that collects and merges related diagnostic information
@@ -69,10 +68,6 @@ pub struct DiagnosticEntry {
 
     /// Provider relationships extracted from error chain
     pub provider_relationships: Vec<ProviderRelationship>,
-
-    /// Unsatisfied provider trait bound (for transitive dependency errors)
-    /// This captures cases like "the trait bound `Provider: ProviderTrait<Context>` is not satisfied"
-    pub unsatisfied_provider_trait: Option<UnsatisfiedProviderTrait>,
 
     /// Delegation chain notes (raw, for later processing)
     pub delegation_notes: Vec<String>,
@@ -181,9 +176,6 @@ impl DiagnosticDatabase {
         let has_other_hasfield_impls = has_other_hasfield_implementations(diagnostic);
         let error_code = diagnostic.code.as_ref().map(|c| c.code.clone());
 
-        // Extract unsatisfied provider trait bound from the main error message
-        let unsatisfied_provider_trait = extract_unsatisfied_provider_trait(&diagnostic.message);
-
         // Determine if this is a root cause
         // A root cause has field_info (missing field) or is the most specific error
         let is_root_cause = field_info.is_some();
@@ -196,7 +188,6 @@ impl DiagnosticDatabase {
             component_info,
             check_trait,
             provider_relationships,
-            unsatisfied_provider_trait,
             delegation_notes,
             has_other_hasfield_impls,
             primary_span: Some(primary_span),
@@ -230,12 +221,6 @@ impl DiagnosticDatabase {
             // Merge check trait
             if existing.check_trait.is_none() {
                 existing.check_trait = Self::extract_check_trait_from_diagnostic(new);
-            }
-
-            // Merge unsatisfied provider trait (keep the first one we find)
-            if existing.unsatisfied_provider_trait.is_none() {
-                existing.unsatisfied_provider_trait =
-                    extract_unsatisfied_provider_trait(&new.message);
             }
 
             // Add new provider relationships

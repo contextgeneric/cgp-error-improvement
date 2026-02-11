@@ -69,12 +69,10 @@ fn test_base_area_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: consumer trait of `AreaCalculatorComponent` for `Rectangle` (consumer trait)
+                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
-                      ├─ requires: HasRectangleFields for Rectangle (getter trait)
-                      │  └─ requires: field `heig�t` on Rectangle ✗
-                      └─ requires: consumer trait for CanUseComponent for Rectangle (consumer trait)
-                         └─ requires: CanUseComponent<Rectangle> for provider Rectangle (provider trait) ✗
+                      └─ requires: HasRectangleFields for Rectangle (getter trait)
+                         └─ requires: field `heig�t` on Rectangle ✗
             
             To fix this error:
                 • Add a field `heig�t` to the `Rectangle` struct at examples/src/base_area.rs:41
@@ -114,12 +112,10 @@ fn test_base_area_2_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: consumer trait of `AreaCalculatorComponent` for `Rectangle` (consumer trait)
+                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
-                      ├─ requires: HasRectangleFields for Rectangle (getter trait)
-                      │  └─ requires: field `width` on Rectangle ✗
-                      └─ requires: consumer trait for CanUseComponent for Rectangle (consumer trait)
-                         └─ requires: CanUseComponent<Rectangle> for provider Rectangle (provider trait) ✗
+                      └─ requires: HasRectangleFields for Rectangle (getter trait)
+                         └─ requires: field `width` on Rectangle ✗
             
             To fix this error:
                 • If the struct has the field `width`, add `#[derive(HasField)]` to the struct definition at `examples/src/base_area_2.rs:41`
@@ -158,7 +154,7 @@ fn test_scaled_area_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: consumer trait of `AreaCalculatorComponent` for `Rectangle` (consumer trait)
+                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider ScaledArea<RectangleArea> (provider trait)
                       ├─ requires: HasRectangleFields for Rectangle (getter trait)
                       │  └─ requires: field `height` on Rectangle ✗
@@ -195,12 +191,10 @@ fn test_scaled_area_2_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
-                └─ requires: consumer trait of `AreaCalculatorComponent` for `Rectangle` (consumer trait)
+                └─ requires: AreaCalculator<Rectangle> for Rectangle (consumer trait)
                    └─ requires: AreaCalculator<Rectangle> for provider ScaledArea<RectangleArea> (provider trait)
-                      ├─ requires: HasScaleFactor for Rectangle (getter trait)
-                      │  └─ requires: field `scale_factor` on Rectangle ✗
-                      └─ requires: consumer trait for CanUseComponent for Rectangle (consumer trait)
-                         └─ requires: CanUseComponent<Rectangle> for provider Rectangle (provider trait) ✗
+                      └─ requires: HasScaleFactor for Rectangle (getter trait)
+                         └─ requires: field `scale_factor` on Rectangle ✗
             
             To fix this error:
                 • Add a field `scale_factor` to the `Rectangle` struct at examples/src/scaled_area_2.rs:58
@@ -226,12 +220,8 @@ fn test_density_error() {
         `----
       help: Dependency chain:
               CanUseRectangle for Rectangle (check trait)
-              └─ requires: consumer trait of `DensityCalculatorComponent` for `Rectangle` (consumer trait)
+              └─ requires: CanCalculateArea for Rectangle (consumer trait)
                  └─ requires: DensityCalculator<Rectangle> for provider DensityFromMassField (provider trait)
-                    └─ requires: CanCalculateArea for Rectangle (consumer trait)
-                       └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait) ✗
-            
-            Add a check that `Rectangle` can use `AreaCalculatorComponent` using `check_components!` to get further details on the missing dependencies.
     ");
 }
 
@@ -254,11 +244,7 @@ fn test_density_2_error() {
         `----
       help: Dependency chain:
               CanUseRectangle for Rectangle (check trait)
-              └─ requires: consumer trait of `DensityCalculatorComponent` for `Rectangle` (consumer trait)
+              └─ requires: CanCalculateArea for Rectangle (consumer trait)
                  └─ requires: DensityCalculator<Rectangle> for provider DensityFromMassField (provider trait)
-                    └─ requires: CanCalculateArea for Rectangle (consumer trait)
-                       └─ requires: AreaCalculator<Rectangle> for provider ScaledArea<RectangleArea> (provider trait) ✗
-            
-            Add a check that `Rectangle` can use `AreaCalculatorComponent` using `check_components!` to get further details on the missing dependencies.
     ");
 }

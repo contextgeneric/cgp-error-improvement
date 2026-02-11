@@ -230,20 +230,6 @@ fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
         for line in delegation_lines {
             help_sections.push(format!("  {}", line));
         }
-        help_sections.push(String::new());
-    }
-
-    // Add help for transitive dependencies
-    if let Some(ref unsatisfied) = entry.unsatisfied_provider_trait {
-        // Suggest checking the indirect component
-        if entry.component_info.is_some() {
-            // Try to derive the component name from the provider trait
-            let indirect_component = format!("{}Component", unsatisfied.provider_trait);
-            help_sections.push(format!(
-                "Add a check that `{}` can use `{}` using `check_components!` to get further details on the missing dependencies.",
-                unsatisfied.context, indirect_component
-            ));
-        }
     }
 
     let help = if help_sections.is_empty() {
@@ -430,6 +416,18 @@ fn render_dependency_tree(
     result
 }
 
+/// Extracts consumer trait name from component name
+/// E.g., "AreaCalculatorComponent" -> "CanCalculateArea" (via provider -> consumer mapping)
+fn extract_consumer_trait_from_component(component_name: &str) -> Option<String> {
+    // Try to derive provider name first
+    let _provider = derive_provider_trait_name(component_name)?;
+
+    // We can't reliably derive the consumer trait from just the component name
+    // Consumer traits follow "Can{Action}" pattern but we'd need a mapping
+    // For now, keep generic description
+    None
+}
+
 /// Builds a dependency tree from delegation notes and provider relationships
 fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
     // Build root node from check trait
@@ -455,10 +453,14 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
         // Try to extract consumer trait name from notes, otherwise use component-based description
         let consumer_desc =
             extract_consumer_trait_from_notes(&entry.delegation_notes, &context_type)
+                .or_else(|| extract_consumer_trait_from_component(&component_info.component_type))
                 .unwrap_or_else(|| {
-                    // If we can't find the consumer trait name, use a descriptive format
-                    let component_name = strip_module_prefixes(&component_info.component_type);
-                    format!("consumer trait of `{}` for `{}`", component_name, context_type)
+                    // Derive from provider trait if available
+                    if let Some(ref provider_trait) = component_info.provider_trait {
+                        format!("{}<{}> for {}", provider_trait, context_type, context_type)
+                    } else {
+                        format!("consumer trait for {}", context_type)
+                    }
                 });
 
         // Apply module prefix stripping to the final description
@@ -488,58 +490,54 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
 
     let mut provider_nodes = Vec::new();
 
-    // Only consider providers as "outer" if there are actual inner providers
-    // Otherwise they're all simple providers
-    if !all_inner_providers.is_empty() {
-        // Find outer provider (if exists)
-        let outer_providers: Vec<_> = deduped_relationships
-            .iter()
-            .filter(|r| {
-                !all_inner_providers
-                    .iter()
-                    .any(|inner| inner == &r.provider_type)
-            })
-            .collect();
+    // Find outer provider (if exists)
+    let outer_providers: Vec<_> = deduped_relationships
+        .iter()
+        .filter(|r| {
+            !all_inner_providers
+                .iter()
+                .any(|inner| inner == &r.provider_type)
+        })
+        .collect();
 
-        if let Some(outer_rel) = outer_providers.first() {
-            // This is a higher-order provider
-            if let Some(provider_trait) = &entry
-                .component_info
-                .as_ref()
-                .and_then(|c| c.provider_trait.clone())
-            {
-                let description = format!(
-                    "{}<{}> for provider {}",
-                    provider_trait, context_type, outer_rel.provider_type
+    if let Some(outer_rel) = outer_providers.first() {
+        // This is a higher-order provider
+        if let Some(provider_trait) = &entry
+            .component_info
+            .as_ref()
+            .and_then(|c| c.provider_trait.clone())
+        {
+            let description = format!(
+                "{}<{}> for provider {}",
+                provider_trait, context_type, outer_rel.provider_type
+            );
+            let mut outer_node = DependencyNode {
+                description: strip_module_prefixes(&description),
+                trait_type: Some("provider trait".to_string()),
+                is_satisfied: None,
+                children: Vec::new(),
+            };
+
+            // Add getter requirements and inner provider as children
+            let getter_children = build_getter_nodes(entry, context_type);
+            outer_node.children.extend(getter_children);
+
+            // Add inner provider node if exists
+            if let Some(inner_provider) = all_inner_providers.first() {
+                let inner_desc = format!(
+                    "{}<{}> for inner provider {}",
+                    provider_trait, context_type, inner_provider
                 );
-                let mut outer_node = DependencyNode {
-                    description: strip_module_prefixes(&description),
+                let inner_node = DependencyNode {
+                    description: strip_module_prefixes(&inner_desc),
                     trait_type: Some("provider trait".to_string()),
-                    is_satisfied: None,
+                    is_satisfied: Some(true), // Inner is OK if outer has the error
                     children: Vec::new(),
                 };
-
-                // Add getter requirements and inner provider as children
-                let getter_children = build_getter_nodes(entry, context_type);
-                outer_node.children.extend(getter_children);
-
-                // Add inner provider node if exists
-                if let Some(inner_provider) = all_inner_providers.first() {
-                    let inner_desc = format!(
-                        "{}<{}> for inner provider {}",
-                        provider_trait, context_type, inner_provider
-                    );
-                    let inner_node = DependencyNode {
-                        description: strip_module_prefixes(&inner_desc),
-                        trait_type: Some("provider trait".to_string()),
-                        is_satisfied: Some(true), // Inner is OK if outer has the error
-                        children: Vec::new(),
-                    };
-                    outer_node.children.push(inner_node);
-                }
-
-                provider_nodes.push(outer_node);
+                outer_node.children.push(inner_node);
             }
+
+            provider_nodes.push(outer_node);
         }
     } else if let Some(rel) = deduped_relationships.first() {
         // Simple provider (no higher-order)
@@ -561,75 +559,13 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
 
             // Add getter requirements as children
             let getter_children = build_getter_nodes(entry, context_type);
-            provider_node.children.extend(getter_children);
-
-            // Check if this provider has an unsatisfied provider trait bound (transitive dependency)
-            if let Some(ref unsatisfied) = entry.unsatisfied_provider_trait {
-                // This provider requires another consumer trait which isn't satisfied
-                // Add a consumer trait node and its failing provider as children
-                let transitive_nodes = build_transitive_dependency_nodes(unsatisfied, context_type);
-                provider_node.children.extend(transitive_nodes);
-            }
+            provider_node.children = getter_children;
 
             provider_nodes.push(provider_node);
         }
     }
 
     provider_nodes
-}
-
-/// Builds nodes for transitive dependency failures
-/// When a provider requires a consumer trait that isn't satisfied,
-/// we show the consumer trait and its failing provider
-fn build_transitive_dependency_nodes(
-    unsatisfied: &crate::cgp_patterns::UnsatisfiedProviderTrait,
-    context_type: &str,
-) -> Vec<DependencyNode> {
-    let mut nodes = Vec::new();
-
-    // Try to derive consumer trait name from provider trait
-    // Pattern: AreaCalculator -> CanCalculateArea
-    let consumer_trait_name = derive_consumer_trait_name(&unsatisfied.provider_trait)
-        .unwrap_or_else(|| format!("consumer trait for {}", unsatisfied.provider_trait));
-
-    // Add consumer trait node
-    let consumer_desc = format!("{} for {}", consumer_trait_name, context_type);
-    let mut consumer_node = DependencyNode {
-        description: strip_module_prefixes(&consumer_desc),
-        trait_type: Some("consumer trait".to_string()),
-        is_satisfied: None,
-        children: Vec::new(),
-    };
-
-    // Add the failing provider trait as a child
-    let provider_desc = format!(
-        "{}<{}> for provider {}",
-        unsatisfied.provider_trait, context_type, unsatisfied.provider_type
-    );
-    let provider_node = DependencyNode {
-        description: strip_module_prefixes(&provider_desc),
-        trait_type: Some("provider trait".to_string()),
-        is_satisfied: Some(false), // This is the failing provider
-        children: Vec::new(),
-    };
-
-    consumer_node.children.push(provider_node);
-    nodes.push(consumer_node);
-
-    nodes
-}
-
-/// Derives consumer trait name from provider trait name
-/// E.g., "AreaCalculator" -> "CanCalculateArea"
-fn derive_consumer_trait_name(provider_trait: &str) -> Option<String> {
-    // Common pattern: XyzCalculator -> CanCalculateXyz
-    if let Some(base) = provider_trait.strip_suffix("Calculator") {
-        return Some(format!("CanCalculate{}", base));
-    }
-
-    // Other common patterns can be added here
-    // For now, we just handle Calculator suffix
-    None
 }
 
 /// Builds getter trait nodes from delegation notes
@@ -673,30 +609,14 @@ fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depend
 
 /// Extracts consumer trait from delegation notes
 fn extract_consumer_trait_from_notes(notes: &[String], context_type: &str) -> Option<String> {
-    // We should only extract a consumer trait if it appears AFTER the IsProviderFor note
-    // in the delegation chain. Consumer traits mentioned BEFORE IsProviderFor are transitive
-    // dependencies, not the consumer trait for the component being checked.
-    
-    let mut found_is_provider_for = false;
-    
-    // Iterate through notes in order
+    // Look for "Can*" traits in the notes, but exclude CanUseComponent (that's the check trait wrapper)
     for note in notes {
-        // Check if we've reached the IsProviderFor note
-        if note.contains("IsProviderFor") {
-            found_is_provider_for = true;
-            continue;
-        }
-        
-        // Only look for Can* traits after we've seen IsProviderFor
-        if found_is_provider_for {
-            if let Some(trait_name) = extract_trait_from_note(note) {
-                if trait_name.starts_with("Can") && !trait_name.contains("CanUseComponent") {
-                    return Some(format!("{} for {}", trait_name, context_type));
-                }
+        if let Some(trait_name) = extract_trait_from_note(note) {
+            if trait_name.starts_with("Can") && !trait_name.contains("CanUseComponent") {
+                return Some(format!("{} for {}", trait_name, context_type));
             }
         }
     }
-    
     None
 }
 
