@@ -1,6 +1,6 @@
+use crate::cgp_patterns::is_cgp_diagnostic;
 use crate::diagnostic_db::DiagnosticDatabase;
 use crate::error_formatting::render_diagnostic_plain;
-use crate::render::render_message;
 use cargo_metadata::Message;
 use std::fs::File;
 use std::io::BufReader;
@@ -26,8 +26,11 @@ pub fn test_cgp_error_from_json(json_filename: &str, test_name: &str) -> Vec<Str
     let mut db = DiagnosticDatabase::new();
 
     for message in Message::parse_stream(reader) {
-        let message = message.expect("Failed to parse message");
-        render_message(&message, &mut db);
+        if let Message::CompilerMessage(msg) = message.expect("Failed to parse message") {
+            if is_cgp_diagnostic(&msg.message) {
+                db.add_diagnostic(&msg);
+            }
+        }
     }
 
     let cgp_diagnostics = db.render_cgp_diagnostics();

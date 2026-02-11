@@ -544,14 +544,6 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
     Some(root)
 }
 
-/// Builds provider nodes from provider relationships
-/// This is now a wrapper that calls the component-specific version
-fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<DependencyNode> {
-    // Use the first component if available, otherwise None
-    let component_info = entry.component_infos.first();
-    build_provider_nodes_for_component(entry, context_type, component_info)
-}
-
 /// Builds provider nodes for a specific component
 /// If component_info is None, builds nodes based on provider relationships alone
 fn build_provider_nodes_for_component(
