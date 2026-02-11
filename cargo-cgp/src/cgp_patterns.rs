@@ -84,12 +84,37 @@ pub fn extract_component_info(message: &str) -> Option<ComponentInfo> {
     if let Some(info) = extract_component_from_can_use(message) {
         return Some(info);
     }
+    // Try IsProviderFor pattern - extract component from inside the generic
+    // Pattern: `IsProviderFor<ComponentName, Context>`
+    if let Some(start) = message.find("IsProviderFor<") {
+        let after_start = start + "IsProviderFor<".len();
+
+        // Find the first comma (component name ends before it)
+        if let Some(comma_pos) = message[after_start..].find(',') {
+            let component_type = message[after_start..after_start + comma_pos].trim();
+
+            // Verify it looks like a component (ends with "Component" or contains it)
+            if component_type.contains("Component") {
+                let provider_trait = derive_provider_trait_name(component_type);
+                return Some(ComponentInfo {
+                    component_type: component_type.to_string(),
+                    provider_trait,
+                });
+            }
+        }
+    }
 
     // Try to find component names by the "*Component" suffix pattern
     // This is a general CGP naming convention
     for word in message.split_whitespace() {
         let clean_word =
             word.trim_matches(|c: char| !c.is_alphanumeric() && c != '<' && c != '>' && c != ',');
+
+        // Skip if this is part of an IsProviderFor pattern
+        // We handle that separately above
+        if clean_word.contains("IsProviderFor") {
+            continue;
+        }
 
         if clean_word.contains("Component") {
             // Extract the component type, handling generics

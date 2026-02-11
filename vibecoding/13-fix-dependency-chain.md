@@ -53,6 +53,8 @@ We will need to perform arbitrarily deep rendering of transitive dependencies, t
 
 In this example, we can also see that the consumer trait name `CanCalculateArea` is visible from the error log, but the consumer trait name `CanCalculateDensity` is hidden.
 
+Your changes must not affect the output from the other examples, in particular: `base_area.rs`, `base_area_2.rs`, `scaled_area.rs`, `scaled_area_2.rs`.
+
 Following is the suggestion for improved error message for `density.rs`:
 
 ```

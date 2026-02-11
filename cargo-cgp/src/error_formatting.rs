@@ -230,6 +230,30 @@ fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
         for line in delegation_lines {
             help_sections.push(format!("  {}", line));
         }
+        help_sections.push(String::new()); // Blank line
+    }
+
+    // Check for nested consumer traits and add help message for indirect components
+    let nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
+    if !nested_consumers.is_empty() {
+        // Get the context type from the unsatisfied provider or delegation notes
+        let context_type = extract_unsatisfied_provider_from_message(&entry.message)
+            .map(|u| u.context_type)
+            .or_else(|| extract_context_from_notes(&entry.delegation_notes))
+            .unwrap_or_else(|| "the context".to_string());
+
+        // For each nested consumer trait, suggest checking its component
+        for nested_consumer in &nested_consumers {
+            if let Some(component_name) =
+                derive_component_from_consumer_trait(&nested_consumer.trait_name)
+            {
+                help_sections.push(format!(
+                    "Add a check that `{}` can use `{}` using `check_components!` to get further details on the missing dependencies.",
+                    context_type,
+                    component_name
+                ));
+            }
+        }
     }
 
     let help = if help_sections.is_empty() {
@@ -416,16 +440,20 @@ fn render_dependency_tree(
     result
 }
 
-/// Extracts consumer trait name from component name
-/// E.g., "AreaCalculatorComponent" -> "CanCalculateArea" (via provider -> consumer mapping)
-fn extract_consumer_trait_from_component(component_name: &str) -> Option<String> {
-    // Try to derive provider name first
-    let _provider = derive_provider_trait_name(component_name)?;
-
-    // We can't reliably derive the consumer trait from just the component name
-    // Consumer traits follow "Can{Action}" pattern but we'd need a mapping
-    // For now, keep generic description
-    None
+/// Derives a component name from a consumer trait name
+/// E.g., "CanCalculateArea" -> "AreaCalculatorComponent"
+/// This is a heuristic that works for common CGP naming patterns:
+/// - Consumer trait: Can{Action} (e.g., CanCalculateArea)
+/// - Component: {Action}Component (e.g., AreaCalculatorComponent)
+fn derive_component_from_consumer_trait(consumer_trait: &str) -> Option<String> {
+    // Check if it starts with "Can"
+    if let Some(action_part) = consumer_trait.strip_prefix("Can") {
+        // Remove the "Can" prefix and append "Component"
+        // E.g., "CalculateArea" -> "AreaCalculatorComponent"
+        Some(format!("{}Component", action_part))
+    } else {
+        None
+    }
 }
 
 /// Builds a dependency tree from delegation notes and provider relationships
@@ -450,25 +478,16 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
 
     // Add consumer trait level
     if let Some(component_info) = &entry.component_info {
-        // Try to extract consumer trait name from notes, otherwise use component-based description
-        let consumer_desc =
-            extract_consumer_trait_from_notes(&entry.delegation_notes, &context_type)
-                .or_else(|| extract_consumer_trait_from_component(&component_info.component_type))
-                .unwrap_or_else(|| {
-                    // When consumer trait cannot be found, describe it using the component name
-                    // This is clearer than trying to use the provider trait name, which would be incorrect
-                    let component_name = strip_module_prefixes(&component_info.component_type);
-                    format!(
-                        "consumer trait of `{}` for {}",
-                        component_name, context_type
-                    )
-                });
-
-        // Apply module prefix stripping to the final description
-        let cleaned_desc = strip_module_prefixes(&consumer_desc);
+        // For the top-level consumer trait, use component-based description
+        // Don't try to extract from notes, as that may give us a nested consumer trait
+        let component_name = strip_module_prefixes(&component_info.component_type);
+        let consumer_desc = format!(
+            "consumer trait of `{}` for `{}`",
+            component_name, context_type
+        );
 
         let mut consumer_node = DependencyNode {
-            description: cleaned_desc,
+            description: consumer_desc,
             trait_type: Some("consumer trait".to_string()),
             is_satisfied: None,
             children: Vec::new(),
@@ -523,6 +542,13 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
             let getter_children = build_getter_nodes(entry, context_type);
             outer_node.children.extend(getter_children);
 
+            // Check for nested consumer trait dependencies (for outer providers too)
+            let nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
+            for nested_consumer in &nested_consumers {
+                let nested_nodes = build_nested_consumer_provider_nodes(entry, nested_consumer);
+                outer_node.children.extend(nested_nodes);
+            }
+
             // Add inner provider node if exists
             if let Some(inner_provider) = all_inner_providers.first() {
                 let inner_desc = format!(
@@ -560,7 +586,16 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
 
             // Add getter requirements as children
             let getter_children = build_getter_nodes(entry, context_type);
-            provider_node.children = getter_children;
+            provider_node.children.extend(getter_children);
+
+            // Check for nested consumer trait dependencies
+            // These are consumer traits that the provider depends on
+            let nested_consumers = extract_nested_consumer_traits(&entry.delegation_notes);
+            for nested_consumer in &nested_consumers {
+                // Build nodes for the nested consumer + its unsatisfied provider
+                let nested_nodes = build_nested_consumer_provider_nodes(entry, nested_consumer);
+                provider_node.children.extend(nested_nodes);
+            }
 
             provider_nodes.push(provider_node);
         }
@@ -608,17 +643,49 @@ fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depend
     getter_nodes
 }
 
-/// Extracts consumer trait from delegation notes
-fn extract_consumer_trait_from_notes(notes: &[String], context_type: &str) -> Option<String> {
-    // Look for "Can*" traits in the notes, but exclude CanUseComponent (that's the check trait wrapper)
-    for note in notes {
-        if let Some(trait_name) = extract_trait_from_note(note) {
-            if trait_name.starts_with("Can") && !trait_name.contains("CanUseComponent") {
-                return Some(format!("{} for {}", trait_name, context_type));
-            }
-        }
+/// Builds nodes for nested consumer+provider dependencies
+/// This handles cases where a provider depends on another consumer trait,
+/// which in turn requires another provider that's not satisfied.
+///
+/// For example: DensityFromMassField -> requires CanCalculateArea -> requires RectangleArea
+fn build_nested_consumer_provider_nodes(
+    entry: &DiagnosticEntry,
+    nested_consumer: &NestedConsumerTrait,
+) -> Vec<DependencyNode> {
+    let mut nodes = Vec::new();
+
+    // Create a node for the nested consumer trait
+    let consumer_desc = format!(
+        "{} for {}",
+        nested_consumer.trait_name, nested_consumer.context_type
+    );
+    let mut consumer_node = DependencyNode {
+        description: consumer_desc,
+        trait_type: Some("consumer trait".to_string()),
+        is_satisfied: None,
+        children: Vec::new(),
+    };
+
+    // Try to extract the unsatisfied provider from the main error message
+    if let Some(unsatisfied) = extract_unsatisfied_provider_from_message(&entry.message) {
+        // Create a provider node that's marked as unsatisfied
+        let provider_desc = format!(
+            "{}<{}> for provider {}",
+            unsatisfied.trait_name, unsatisfied.context_type, unsatisfied.provider_type
+        );
+
+        let provider_node = DependencyNode {
+            description: strip_module_prefixes(&provider_desc),
+            trait_type: Some("provider trait".to_string()),
+            is_satisfied: Some(false), // Mark as unsatisfied
+            children: Vec::new(),
+        };
+
+        consumer_node.children.push(provider_node);
     }
-    None
+
+    nodes.push(consumer_node);
+    nodes
 }
 
 /// Extracts getter trait name from a delegation note
@@ -675,6 +742,115 @@ fn extract_context_from_notes(notes: &[String]) -> Option<String> {
             }
         }
     }
+    None
+}
+
+/// Information about a nested consumer trait dependency
+/// This represents a consumer trait that a provider depends on
+#[derive(Debug, Clone)]
+struct NestedConsumerTrait {
+    /// The consumer trait name (e.g., "CanCalculateArea")
+    trait_name: String,
+    /// The context type (e.g., "Rectangle")
+    context_type: String,
+}
+
+/// Extracts nested consumer trait dependencies from delegation notes
+/// These are consumer traits that providers depend on, shown in notes like:
+/// "required for `Rectangle` to implement `CanCalculateArea`"
+fn extract_nested_consumer_traits(notes: &[String]) -> Vec<NestedConsumerTrait> {
+    let mut results = Vec::new();
+
+    for note in notes {
+        // Look for pattern: "required for `Context` to implement `TraitName`"
+        // This indicates that the provider depends on this consumer trait
+        if let Some(for_pos) = note.find("required for `") {
+            let after_for = for_pos + "required for `".len();
+
+            // Extract context type (between first ` and next `)
+            if let Some(context_end) = note[after_for..].find('`') {
+                let context_type = &note[after_for..after_for + context_end];
+
+                // Look for the trait name after "to implement `"
+                if let Some(implement_pos) = note[after_for + context_end..].find("to implement `")
+                {
+                    let trait_start =
+                        after_for + context_end + implement_pos + "to implement `".len();
+
+                    if let Some(trait_end) = note[trait_start..].find('`') {
+                        let trait_name = &note[trait_start..trait_start + trait_end];
+
+                        // Filter out internal CGP traits - we only want consumer traits
+                        // Consumer traits typically start with "Can" but exclude framework traits
+                        let cleaned_trait = strip_module_prefixes(trait_name);
+
+                        // Skip if it's an IsProviderFor or CanUseComponent trait (these are internal)
+                        if cleaned_trait.starts_with("Can")
+                            && !cleaned_trait.contains("CanUseComponent")
+                            && !cleaned_trait.starts_with("IsProviderFor")
+                        {
+                            results.push(NestedConsumerTrait {
+                                trait_name: cleaned_trait,
+                                context_type: strip_module_prefixes(context_type),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Information about an unsatisfied provider trait extracted from the error message
+#[derive(Debug, Clone)]
+struct UnsatisfiedProvider {
+    /// The provider type (e.g., "RectangleArea")
+    provider_type: String,
+    /// The trait that's not satisfied (e.g., "AreaCalculator")
+    trait_name: String,
+    /// The context type (e.g., "Rectangle")
+    context_type: String,
+}
+
+/// Extracts unsatisfied provider information from the main error message
+/// Error messages follow the pattern:
+/// "the trait bound `ProviderType: TraitName<Context>` is not satisfied"
+fn extract_unsatisfied_provider_from_message(message: &str) -> Option<UnsatisfiedProvider> {
+    // Look for pattern: "the trait bound `Provider: Trait<Context>` is not satisfied"
+    if let Some(bound_start) = message.find("the trait bound `") {
+        let after_bound = bound_start + "the trait bound `".len();
+
+        // Find the closing backtick
+        if let Some(bound_end) = message[after_bound..].find("` is not satisfied") {
+            let bound_str = &message[after_bound..after_bound + bound_end];
+
+            // Parse "Provider: Trait<Context>"
+            if let Some(colon_pos) = bound_str.find(": ") {
+                let provider_type = bound_str[..colon_pos].trim();
+                let trait_and_context = bound_str[colon_pos + 2..].trim();
+
+                // Parse "Trait<Context>"
+                if let Some(open_bracket) = trait_and_context.find('<') {
+                    let trait_name = trait_and_context[..open_bracket].trim();
+
+                    // Extract context (everything between < and >)
+                    if let Some(close_bracket) = trait_and_context.find('>') {
+                        let context_type =
+                            trait_and_context[open_bracket + 1..close_bracket].trim();
+
+                        return Some(UnsatisfiedProvider {
+                            provider_type: strip_module_prefixes(provider_type),
+                            trait_name: strip_module_prefixes(trait_name),
+                            context_type: strip_module_prefixes(context_type),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 
