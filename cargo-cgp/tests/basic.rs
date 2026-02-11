@@ -61,13 +61,17 @@ fn test_base_area_error() {
      42 |     }
         `----
       help: note: some characters in the field name are hidden by the compiler and shown as '�'
-            the struct `Rectangle` is missing the required field `heig�t`
-            ensure a field `heig�t` of the appropriate type is present in the `Rectangle` struct
-            note: this field is required by the trait bound `CanUseRectangle`
-            note: delegation chain:
-              required for `Rectangle` to implement `HasRectangleFields`
-              required for `RectangleArea` to implement the provider trait `AreaCalculator`
-              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+            The struct `Rectangle` is missing the required field `heig�t`.
+            This field is required by the component `AreaCalculatorComponent`.
+            The check trait `CanUseRectangle` verifies that all required components are available.
+            
+            Dependency chain:
+              → required for `Rectangle` to implement `HasRectangleFields`
+              → required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              → required for `Rectangle` to implement `use component `AreaCalculatorComponent>`
+            
+            To fix this error:
+              - Add the field `heig�t` to the `Rectangle` struct
     ");
 }
 
@@ -97,13 +101,18 @@ fn test_base_area_2_error() {
         :                    `-- unsatisfied trait bound
      42 |     }
         `----
-      help: the struct `Rectangle` is either missing the field `width` or is missing `#[derive(HasField)]`
-            ensure a field `width` of the appropriate type is present in the `Rectangle` struct, or add `#[derive(HasField)]` if the struct is missing the derive
-            note: this field is required by the trait bound `CanUseRectangle`
-            note: delegation chain:
-              required for `Rectangle` to implement `HasRectangleFields`
-              required for `RectangleArea` to implement the provider trait `AreaCalculator`
-              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+      help: The struct `Rectangle` is either missing the field `width` or is missing `#[derive(HasField)]`.
+            This field is required by the component `AreaCalculatorComponent`.
+            The check trait `CanUseRectangle` verifies that all required components are available.
+            
+            Dependency chain:
+              → required for `Rectangle` to implement `HasRectangleFields`
+              → required for `RectangleArea` to implement the provider trait `AreaCalculator`
+              → required for `Rectangle` to implement `use component `AreaCalculatorComponent>`
+            
+            To fix this error:
+              - Add `#[derive(HasField)]` to the `Rectangle` struct, if missing
+              - Ensure the field `width` exists in the struct
     ");
 }
 
@@ -131,14 +140,17 @@ fn test_scaled_area_error() {
         :                    `-- unsatisfied trait bound
      59 |     }
         `----
-      help: the struct `Rectangle` is missing the required field `height`
-            ensure a field `height` of the appropriate type is present in the `Rectangle` struct
-            note: this field is required by the trait bound `CanUseRectangle`
-            note: delegation chain:
-              the error in `ScaledArea<RectangleArea>` is likely caused by the inner provider `RectangleArea`
-              required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
-              required for `Rectangle` to implement `HasRectangleFields`
+      help: The struct `Rectangle` is missing the required field `height`.
+            The check trait `CanUseRectangle` verifies that all required components are available.
+            
+            Dependency chain:
+              → The error in `ScaledArea<RectangleArea>` is caused by the inner provider `RectangleArea`
+              → required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              → required for `Rectangle` to implement `use component `AreaCalculatorComponent>`
+              → required for `Rectangle` to implement `HasRectangleFields`
+            
+            To fix this error:
+              - Add the field `height` to the `Rectangle` struct
     ");
 }
 
@@ -159,12 +171,16 @@ fn test_scaled_area_2_error() {
         :                    `-- unsatisfied trait bound
      59 |     }
         `----
-      help: the struct `Rectangle` is missing the required field `scale_factor`
-            ensure a field `scale_factor` of the appropriate type is present in the `Rectangle` struct
-            note: this field is required by the trait bound `CanUseRectangle`
-            note: delegation chain:
-              required for `Rectangle` to implement `HasScaleFactor`
-              required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
-              required for `Rectangle` to implement `the consumer trait `CanUseRectangle`
+      help: The struct `Rectangle` is missing the required field `scale_factor`.
+            This field is required by the component `AreaCalculatorComponent`.
+            The check trait `CanUseRectangle` verifies that all required components are available.
+            
+            Dependency chain:
+              → required for `Rectangle` to implement `HasScaleFactor`
+              → required for `ScaledArea<RectangleArea>` to implement the provider trait `AreaCalculator`
+              → required for `Rectangle` to implement `use component `AreaCalculatorComponent>`
+            
+            To fix this error:
+              - Add the field `scale_factor` to the `Rectangle` struct
     ");
 }

@@ -351,8 +351,9 @@ fn extract_balanced_generic(text: &str, start_pos: usize) -> Option<String> {
     }
 }
 
-/// Extracts consumer trait name from "required by a bound in `TraitName`" pattern
-pub fn extract_consumer_trait(message: &str) -> Option<String> {
+/// Extracts check trait name from "required by a bound in `TraitName`" pattern
+/// Note: This extracts the check trait (e.g., CanUseRectangle), NOT the consumer trait
+pub fn extract_check_trait(message: &str) -> Option<String> {
     let start = message.find("required by a bound in `")?;
     let after_start = start + "required by a bound in `".len();
     let end = message[after_start..].find('`')?;

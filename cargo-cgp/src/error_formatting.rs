@@ -60,60 +60,83 @@ fn format_missing_field_error(
         )
     };
 
-    // Build help message with separate sections
-    let mut help_lines = Vec::new();
+    // Build help message with clear sections
+    let mut help_sections = Vec::new();
 
+    // Section 1: Field name warnings
     if field_info.has_unknown_chars {
-        help_lines.push(format!(
+        help_sections.push(format!(
             "note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'"
         ));
     }
 
-    // Main suggestion
+    // Section 2: What's missing
     if entry.has_other_hasfield_impls {
-        help_lines.push(format!(
-            "the struct `{}` is missing the required field `{}`",
+        help_sections.push(format!(
+            "The struct `{}` is missing the required field `{}`.",
             field_info.target_type, formatted_field_name
-        ));
-        help_lines.push(format!(
-            "ensure a field `{}` of the appropriate type is present in the `{}` struct",
-            formatted_field_name, field_info.target_type
         ));
     } else {
-        help_lines.push(format!(
-            "the struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`",
+        help_sections.push(format!(
+            "The struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`.",
             field_info.target_type, formatted_field_name
-        ));
-        help_lines.push(format!(
-            "ensure a field `{}` of the appropriate type is present in the `{}` struct, or add `#[derive(HasField)]` if the struct is missing the derive",
-            formatted_field_name, field_info.target_type
         ));
     }
 
-    // Add note about which trait requires this field
-    if let Some(consumer_trait) = &entry.consumer_trait {
-        help_lines.push(format!(
-            "note: this field is required by the trait bound `{}`",
-            consumer_trait
-        ));
-    } else {
-        help_lines.push("note: this field is required by a CGP trait bound".to_string());
-    }
+    // Section 3: Component context (only if we have a valid component name)
+    if let Some(component_info) = &entry.component_info {
+        // Strip module prefixes and validate the component name
+        let clean_component = strip_module_prefixes(&component_info.component_type);
 
-    // Add delegation chain
-    if !entry.delegation_notes.is_empty() {
-        help_lines.push("note: delegation chain:".to_string());
-        let simplified_notes = simplify_delegation_chain(entry);
-        for note in simplified_notes {
-            help_lines.push(format!("  {}", note));
+        // Only show if it looks like a valid component name (not a malformed extraction)
+        if !clean_component.contains("IsProviderFor<")
+            && !clean_component.contains("CanUseComponent<")
+        {
+            help_sections.push(format!(
+                "This field is required by the component `{}`.",
+                clean_component
+            ));
         }
     }
 
-    let help = if help_lines.is_empty() {
-        None
+    // Section 4: Check trait context (if available)
+    if let Some(check_trait) = &entry.check_trait {
+        help_sections.push(format!(
+            "The check trait `{}` verifies that all required components are available.",
+            check_trait
+        ));
+    }
+
+    // Section 5: Delegation chain
+    if !entry.delegation_notes.is_empty() {
+        help_sections.push(String::new()); // Blank line
+        help_sections.push("Dependency chain:".to_string());
+        let delegation_lines = format_delegation_chain(entry);
+        for line in delegation_lines {
+            help_sections.push(format!("  {}", line));
+        }
+    }
+
+    // Section 6: How to fix
+    help_sections.push(String::new()); // Blank line
+    help_sections.push("To fix this error:".to_string());
+    if entry.has_other_hasfield_impls {
+        help_sections.push(format!(
+            "  - Add the field `{}` to the `{}` struct",
+            formatted_field_name, field_info.target_type
+        ));
     } else {
-        Some(help_lines.join("\n"))
-    };
+        help_sections.push(format!(
+            "  - Add `#[derive(HasField)]` to the `{}` struct, if missing",
+            field_info.target_type
+        ));
+        help_sections.push(format!(
+            "  - Ensure the field `{}` exists in the struct",
+            formatted_field_name
+        ));
+    }
+
+    let help = Some(help_sections.join("\n"));
 
     // Build source code and labels
     let (source_code, labels) = build_source_and_labels(entry);
@@ -132,20 +155,20 @@ fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
     let message = entry.message.clone();
 
     // Build help with simplified notes
-    let mut help_lines = Vec::new();
+    let mut help_sections = Vec::new();
 
     if !entry.delegation_notes.is_empty() {
-        help_lines.push("note: delegation chain:".to_string());
-        let simplified_notes = simplify_delegation_chain(entry);
-        for note in simplified_notes {
-            help_lines.push(format!("  {}", note));
+        help_sections.push("Dependency chain:".to_string());
+        let delegation_lines = format_delegation_chain(entry);
+        for line in delegation_lines {
+            help_sections.push(format!("  {}", line));
         }
     }
 
-    let help = if help_lines.is_empty() {
+    let help = if help_sections.is_empty() {
         None
     } else {
-        Some(help_lines.join("\n"))
+        Some(help_sections.join("\n"))
     };
 
     // Build source code and labels
@@ -195,72 +218,80 @@ fn build_source_and_labels(
         ))
     });
 
-    if let Ok(file_content) = file_result {
-        // Use the actual file content
-        let source_code = NamedSource::new(&span.file_name, file_content.clone());
+    match file_result {
+        Ok(file_content) => {
+            // Use the actual file content
+            let source_code = NamedSource::new(&span.file_name, file_content.clone());
 
-        // Calculate byte offset in the actual file
-        // Count bytes up to the line, then add column offset
-        let lines: Vec<&str> = file_content.lines().collect();
+            // Calculate byte offset in the actual file
+            // Count bytes up to the line, then add column offset
+            let lines: Vec<&str> = file_content.lines().collect();
 
-        let mut byte_offset = 0;
+            let mut byte_offset = 0;
 
-        // Add bytes for all lines before the target line (1-indexed)
-        for (line_idx, line) in lines.iter().enumerate() {
-            if line_idx + 1 < span.line_start {
-                byte_offset += line.len() + 1; // +1 for newline
-            } else {
-                break;
+            // Add bytes for all lines before the target line (1-indexed)
+            for (line_idx, line) in lines.iter().enumerate() {
+                if line_idx + 1 < span.line_start {
+                    byte_offset += line.len() + 1; // +1 for newline
+                } else {
+                    break;
+                }
             }
+
+            // Add column offset (1-indexed, so subtract 1)
+            byte_offset += span.column_start.saturating_sub(1);
+
+            let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+
+            let label_text = span
+                .label
+                .clone()
+                .unwrap_or_else(|| "error occurs here".to_string());
+
+            let labeled_span = LabeledSpan::new_with_span(
+                Some(label_text),
+                SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+            );
+
+            (Some(source_code), vec![labeled_span])
         }
+        Err(_) => {
+            // Fallback: reconstruct from span text
+            let source_text = span
+                .text
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        // Add column offset (1-indexed, so subtract 1)
-        byte_offset += span.column_start.saturating_sub(1);
+            if source_text.is_empty() {
+                // If we have no source text at all, just return nothing
+                return (None, vec![]);
+            }
 
-        let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+            let source_code = NamedSource::new(&span.file_name, source_text);
 
-        let label_text = span
-            .label
-            .clone()
-            .unwrap_or_else(|| "error occurs here".to_string());
+            // For fallback, use simple column offset
+            let byte_offset = span.column_start.saturating_sub(1);
+            let span_length = span.column_end.saturating_sub(span.column_start).max(1);
 
-        let labeled_span = LabeledSpan::new_with_span(
-            Some(label_text),
-            SourceSpan::new(SourceOffset::from(byte_offset), span_length),
-        );
+            let label_text = span
+                .label
+                .clone()
+                .unwrap_or_else(|| "error occurs here".to_string());
 
-        (Some(source_code), vec![labeled_span])
-    } else {
-        // Fallback: reconstruct from span text (old behavior)
-        let source_text = span
-            .text
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+            let labeled_span = LabeledSpan::new_with_span(
+                Some(label_text),
+                SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+            );
 
-        let source_code = NamedSource::new(&span.file_name, source_text);
-
-        // For fallback, use simple column offset
-        let byte_offset = span.column_start.saturating_sub(1);
-        let span_length = span.column_end.saturating_sub(span.column_start).max(1);
-
-        let label_text = span
-            .label
-            .clone()
-            .unwrap_or_else(|| "error occurs here".to_string());
-
-        let labeled_span = LabeledSpan::new_with_span(
-            Some(label_text),
-            SourceSpan::new(SourceOffset::from(byte_offset), span_length),
-        );
-
-        (Some(source_code), vec![labeled_span])
+            (Some(source_code), vec![labeled_span])
+        }
     }
 }
 
-/// Simplifies the delegation chain by removing redundancy and using CGP-aware terminology
-fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
+/// Formats the delegation chain with better structure and CGP-aware terminology
+fn format_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
     // Detect inner providers BEFORE deduplication
     let all_inner_providers: Vec<String> = detect_inner_providers(&entry.provider_relationships);
 
@@ -276,7 +307,7 @@ fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
     // Deduplicate notes first
     let deduped_notes = deduplicate_delegation_notes(&entry.delegation_notes);
 
-    let mut simplified = Vec::new();
+    let mut formatted = Vec::new();
 
     // If we have inner providers and field errors, add a hint about the root cause
     // We check this AFTER deduplication to see which outer providers remain
@@ -291,8 +322,8 @@ fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
             .collect();
 
         if !outer_providers.is_empty() && !all_inner_providers.is_empty() {
-            simplified.push(format!(
-                "the error in `{}` is likely caused by the inner provider `{}`",
+            formatted.push(format!(
+                "→ The error in `{}` is caused by the inner provider `{}`",
                 outer_providers[0].provider_type, all_inner_providers[0]
             ));
         }
@@ -316,11 +347,11 @@ fn simplify_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
             continue;
         }
 
-        let simplified_note = simplify_delegation_note(&note, entry);
-        simplified.push(simplified_note);
+        let formatted_note = format_delegation_note(&note, entry);
+        formatted.push(format!("→ {}", formatted_note));
     }
 
-    simplified
+    formatted
 }
 
 /// Detects inner providers in a list of provider relationships
@@ -361,7 +392,7 @@ fn is_contained_type_parameter(inner_type: &str, outer_type: &str) -> bool {
 }
 
 /// Simplifies a single delegation note
-fn simplify_delegation_note(note: &str, entry: &DiagnosticEntry) -> String {
+fn format_delegation_note(note: &str, _entry: &DiagnosticEntry) -> String {
     let mut result = note.to_string();
 
     // Remove module prefixes
@@ -370,8 +401,8 @@ fn simplify_delegation_note(note: &str, entry: &DiagnosticEntry) -> String {
     // Replace IsProviderFor with user-friendly "provider trait" terminology
     result = replace_is_provider_for(&result);
 
-    // Replace CanUseComponent with user-friendly "consumer trait" terminology
-    result = replace_can_use_component(&result, entry);
+    // Replace CanUseComponent with simpler terminology
+    result = replace_can_use_component(&result);
 
     // Truncate overly long type names
     if result.len() > 150 {
@@ -431,8 +462,8 @@ fn replace_is_provider_for(message: &str) -> String {
     message.to_string()
 }
 
-/// Replaces `CanUseComponent<Component>` with user-friendly "the consumer trait for `Component`"
-fn replace_can_use_component(message: &str, entry: &DiagnosticEntry) -> String {
+/// Replaces `CanUseComponent<Component>` with simpler terminology
+fn replace_can_use_component(message: &str) -> String {
     if !message.contains("CanUseComponent") {
         return message.to_string();
     }
@@ -446,12 +477,8 @@ fn replace_can_use_component(message: &str, entry: &DiagnosticEntry) -> String {
 
         let component_name = message[after_start..end_pos].trim();
 
-        // Build replacement using consumer trait if available
-        let replacement = if let Some(consumer_trait) = &entry.consumer_trait {
-            format!("the consumer trait `{}`", consumer_trait)
-        } else {
-            format!("the consumer trait for `{}`", component_name)
-        };
+        // Build replacement - just explain it's checking component availability
+        let replacement = format!("use component `{}`", component_name);
 
         // Handle backticks
         let before = &message[..start];
@@ -516,11 +543,12 @@ pub fn render_diagnostic_graphical(diagnostic: &CgpDiagnostic) -> String {
     let handler = GraphicalReportHandler::new();
     let mut output = String::new();
 
-    if handler.render_report(&mut output, diagnostic).is_ok() {
-        output
-    } else {
-        // Fallback to simple display if rendering fails
-        format!("error: {}", diagnostic.message)
+    match handler.render_report(&mut output, diagnostic) {
+        Ok(_) => output,
+        Err(_) => {
+            // Fallback to simple display if rendering fails
+            format!("error: {}", diagnostic.message)
+        }
     }
 }
 
@@ -530,11 +558,12 @@ pub fn render_diagnostic_plain(diagnostic: &CgpDiagnostic) -> String {
     let handler = GraphicalReportHandler::new_themed(GraphicalTheme::none());
     let mut output = String::new();
 
-    if handler.render_report(&mut output, diagnostic).is_ok() {
-        output
-    } else {
-        // Fallback to simple display if rendering fails
-        format!("error: {}", diagnostic.message)
+    match handler.render_report(&mut output, diagnostic) {
+        Ok(_) => output,
+        Err(_) => {
+            // Fallback to simple display if rendering fails
+            format!("error: {}", diagnostic.message)
+        }
     }
 }
 
