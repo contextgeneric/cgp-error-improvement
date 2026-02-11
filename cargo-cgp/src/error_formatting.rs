@@ -9,6 +9,19 @@ use crate::cgp_patterns::{
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
 
+/// Node in a dependency tree showing trait requirement relationships
+#[derive(Debug, Clone)]
+struct DependencyNode {
+    /// Description of this requirement
+    description: String,
+    /// Type of trait (check, consumer, provider, getter)
+    trait_type: Option<String>,
+    /// Whether this requirement is satisfied
+    is_satisfied: Option<bool>,
+    /// Child dependencies
+    children: Vec<DependencyNode>,
+}
+
 /// Checks if a field name contains non-basic identifier characters
 /// Basic identifier characters are: a-z, A-Z, 0-9, underscore, hyphen, and the replacement character
 fn has_non_basic_identifier_chars(field_name: &str) -> bool {
@@ -48,91 +61,145 @@ fn format_missing_field_error(
     let formatted_field_name = format_field_name(&field_info.field_name);
 
     // Build the main error message
-    let message = if field_info.is_complete {
+    let message = if entry.has_other_hasfield_impls {
         format!(
-            "missing field `{}` required by CGP component",
-            formatted_field_name
+            "missing field `{}` in the context `{}`.",
+            formatted_field_name, field_info.target_type
         )
     } else {
         format!(
-            "missing field `{}` (possibly incomplete) required by CGP component",
-            formatted_field_name
+            "missing field `{}` or `#[derive(HasField)]` in the context `{}`.",
+            formatted_field_name, field_info.target_type
         )
     };
 
     // Build help message with clear sections
     let mut help_sections = Vec::new();
 
-    // Section 1: Field name warnings
+    // Get component name for context
+    let component_name = entry
+        .component_info
+        .as_ref()
+        .map(|c| strip_module_prefixes(&c.component_type))
+        .filter(|name| !name.contains("IsProviderFor<") && !name.contains("CanUseComponent<"));
+
+    // Section 1: High-level context
+    if entry.field_info.is_some() {
+        if let Some(comp_name) = &component_name {
+            help_sections.push(format!(
+                "Context `{}` is missing a required field to use `{}`.",
+                field_info.target_type, comp_name
+            ));
+        } else {
+            help_sections.push(format!(
+                "Context `{}` is missing a required field.",
+                field_info.target_type
+            ));
+        }
+    } else if let Some(comp_name) = &component_name {
+        help_sections.push(format!(
+            "Context `{}` is missing a required field to use `{}`.",
+            field_info.target_type, comp_name
+        ));
+    }
+
+    // Add note about missing field or derive
+    if entry.has_other_hasfield_impls {
+        help_sections.push(format!(
+            "    note: Missing field: `{}`",
+            formatted_field_name
+        ));
+    } else {
+        help_sections.push(format!(
+            "    note: Missing field: `{}` or struct needs `#[derive(HasField)]`",
+            formatted_field_name
+        ));
+    }
+
+    help_sections.push(String::new()); // Blank line
+
+    // Section 2: Field name warnings (if applicable)
     if field_info.has_unknown_chars {
         help_sections.push(format!(
             "note: some characters in the field name are hidden by the compiler and shown as '\u{FFFD}'"
         ));
+        help_sections.push(String::new());
     }
 
-    // Section 2: What's missing
-    if entry.has_other_hasfield_impls {
+    // Section 3: Struct location (if we have source span)
+    if let Some(span) = &entry.primary_span {
         help_sections.push(format!(
-            "The struct `{}` is missing the required field `{}`.",
-            field_info.target_type, formatted_field_name
+            "The struct `{}` is defined at `{}:{}` but does not have the required field `{}`.",
+            field_info.target_type, span.file_name, span.line_start, formatted_field_name
         ));
-    } else {
-        help_sections.push(format!(
-            "The struct `{}` is either missing the field `{}` or is missing `#[derive(HasField)]`.",
-            field_info.target_type, formatted_field_name
-        ));
+        help_sections.push(String::new());
     }
 
-    // Section 3: Component context (only if we have a valid component name)
-    if let Some(component_info) = &entry.component_info {
-        // Strip module prefixes and validate the component name
-        let clean_component = strip_module_prefixes(&component_info.component_type);
-
-        // Only show if it looks like a valid component name (not a malformed extraction)
-        if !clean_component.contains("IsProviderFor<")
-            && !clean_component.contains("CanUseComponent<")
-        {
-            help_sections.push(format!(
-                "This field is required by the component `{}`.",
-                clean_component
-            ));
-        }
-    }
-
-    // Section 4: Check trait context (if available)
-    if let Some(check_trait) = &entry.check_trait {
-        help_sections.push(format!(
-            "The check trait `{}` verifies that all required components are available.",
-            check_trait
-        ));
-    }
-
-    // Section 5: Delegation chain
+    // Section 4: Dependency chain as tree
     if !entry.delegation_notes.is_empty() {
-        help_sections.push(String::new()); // Blank line
         help_sections.push("Dependency chain:".to_string());
-        let delegation_lines = format_delegation_chain(entry);
-        for line in delegation_lines {
-            help_sections.push(format!("  {}", line));
+        let tree_lines = format_delegation_chain(entry);
+        for line in tree_lines {
+            help_sections.push(format!("    {}", line));
+        }
+        help_sections.push(String::new());
+    }
+
+    // Section 5: Inner provider note (for higher-order providers)
+    let all_inner_providers = detect_inner_providers(&entry.provider_relationships);
+    let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
+
+    if !all_inner_providers.is_empty() {
+        let outer_providers: Vec<_> = deduped_relationships
+            .iter()
+            .filter(|r| {
+                !all_inner_providers
+                    .iter()
+                    .any(|inner| inner == &r.provider_type)
+            })
+            .collect();
+
+        if !outer_providers.is_empty() {
+            help_sections.push(format!(
+                "The error in the higher-order provider `{}` might be caused by its inner provider `{}`.",
+                outer_providers[0].provider_type, all_inner_providers[0]
+            ));
+            help_sections.push(String::new());
         }
     }
 
-    // Section 6: How to fix
-    help_sections.push(String::new()); // Blank line
+    // Section 6: Available fields (optional - requires additional extraction)
+    // For now, we skip this since we'd need to parse additional diagnostics to find existing fields
+
+    // Section 7: How to fix
     help_sections.push("To fix this error:".to_string());
     if entry.has_other_hasfield_impls {
-        help_sections.push(format!(
-            "  - Add the field `{}` to the `{}` struct",
-            formatted_field_name, field_info.target_type
-        ));
+        if let Some(span) = &entry.primary_span {
+            help_sections.push(format!(
+                "    • Add a field `{}` to the `{}` struct at {}:{}",
+                field_info.field_name, field_info.target_type, span.file_name, span.line_start
+            ));
+        } else {
+            help_sections.push(format!(
+                "    • Add a field `{}` to the `{}` struct",
+                field_info.field_name, field_info.target_type
+            ));
+        }
     } else {
+        if let Some(span) = &entry.primary_span {
+            help_sections.push(format!(
+                "    • If the struct has the field `{}`, add `#[derive(HasField)]` to the struct definition at `{}:{}`",
+                field_info.field_name, span.file_name, span.line_start
+            ));
+        } else {
+            help_sections.push(format!(
+                "    • If the struct has the field `{}`, add `#[derive(HasField)]` to the struct definition",
+                field_info.field_name
+            ));
+        }
         help_sections.push(format!(
-            "  - Add `#[derive(HasField)]` to the `{}` struct, if missing",
-            field_info.target_type
-        ));
-        help_sections.push(format!(
-            "  - Ensure the field `{}` exists in the struct",
-            formatted_field_name
+            "    • If the field is missing, add a `{}` field to the struct",
+            field_info.field_name
         ));
     }
 
@@ -290,8 +357,339 @@ fn build_source_and_labels(
     }
 }
 
+/// Renders a dependency tree with box-drawing characters
+fn render_dependency_tree(
+    node: &DependencyNode,
+    prefix: &str,
+    is_last: bool,
+    is_root: bool,
+) -> Vec<String> {
+    let mut result = Vec::new();
+
+    // Build the line for this node
+    if is_root {
+        // Root node has no branch character
+        let mut line = node.description.clone();
+
+        // Add trait type annotation if present
+        if let Some(ref trait_type) = node.trait_type {
+            line.push_str(&format!(" ({})", trait_type));
+        }
+
+        result.push(line);
+    } else {
+        let branch = if is_last { "└─" } else { "├─" };
+        let mut line = format!("{}{} requires: {}", prefix, branch, node.description);
+
+        // Add trait type annotation if present
+        if let Some(ref trait_type) = node.trait_type {
+            line.push_str(&format!(" ({})", trait_type));
+        }
+
+        // Add satisfaction marker if present
+        if let Some(is_satisfied) = node.is_satisfied {
+            line.push_str(if is_satisfied { " ✓" } else { " ✗" });
+        }
+
+        result.push(line);
+    }
+
+    // Render children with updated prefix
+    let child_prefix = if is_root {
+        prefix.to_string()
+    } else if is_last {
+        format!("{}   ", prefix)
+    } else {
+        format!("{}│  ", prefix)
+    };
+
+    for (i, child) in node.children.iter().enumerate() {
+        let child_is_last = i == node.children.len() - 1;
+        result.extend(render_dependency_tree(
+            child,
+            &child_prefix,
+            child_is_last,
+            false,
+        ));
+    }
+
+    result
+}
+
+/// Extracts consumer trait name from component name
+/// E.g., "AreaCalculatorComponent" -> "CanCalculateArea" (via provider -> consumer mapping)
+fn extract_consumer_trait_from_component(component_name: &str) -> Option<String> {
+    // Try to derive provider name first
+    let _provider = derive_provider_trait_name(component_name)?;
+
+    // We can't reliably derive the consumer trait from just the component name
+    // Consumer traits follow "Can{Action}" pattern but we'd need a mapping
+    // For now, keep generic description
+    None
+}
+
+/// Builds a dependency tree from delegation notes and provider relationships
+fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
+    // Build root node from check trait
+    let check_trait = entry.check_trait.as_ref()?;
+    let context_type = entry
+        .field_info
+        .as_ref()
+        .map(|f| f.target_type.clone())
+        .or_else(|| {
+            // Try to extract from delegation notes
+            extract_context_from_notes(&entry.delegation_notes)
+        })?;
+
+    let mut root = DependencyNode {
+        description: format!("{} for {}", check_trait, context_type),
+        trait_type: Some("check trait".to_string()),
+        is_satisfied: None,
+        children: Vec::new(),
+    };
+
+    // Add consumer trait level
+    if let Some(component_info) = &entry.component_info {
+        // Try to extract consumer trait name from notes, otherwise use component-based description
+        let consumer_desc =
+            extract_consumer_trait_from_notes(&entry.delegation_notes, &context_type)
+                .or_else(|| extract_consumer_trait_from_component(&component_info.component_type))
+                .unwrap_or_else(|| {
+                    // Derive from provider trait if available
+                    if let Some(ref provider_trait) = component_info.provider_trait {
+                        format!("{}<{}> for {}", provider_trait, context_type, context_type)
+                    } else {
+                        format!("consumer trait for {}", context_type)
+                    }
+                });
+
+        // Apply module prefix stripping to the final description
+        let cleaned_desc = strip_module_prefixes(&consumer_desc);
+
+        let mut consumer_node = DependencyNode {
+            description: cleaned_desc,
+            trait_type: Some("consumer trait".to_string()),
+            is_satisfied: None,
+            children: Vec::new(),
+        };
+
+        // Add provider level(s)
+        let provider_nodes = build_provider_nodes(entry, &context_type);
+        consumer_node.children = provider_nodes;
+
+        root.children.push(consumer_node);
+    }
+
+    Some(root)
+}
+
+/// Builds provider nodes from provider relationships
+fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<DependencyNode> {
+    let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
+    let all_inner_providers = detect_inner_providers(&entry.provider_relationships);
+
+    let mut provider_nodes = Vec::new();
+
+    // Find outer provider (if exists)
+    let outer_providers: Vec<_> = deduped_relationships
+        .iter()
+        .filter(|r| {
+            !all_inner_providers
+                .iter()
+                .any(|inner| inner == &r.provider_type)
+        })
+        .collect();
+
+    if let Some(outer_rel) = outer_providers.first() {
+        // This is a higher-order provider
+        if let Some(provider_trait) = &entry
+            .component_info
+            .as_ref()
+            .and_then(|c| c.provider_trait.clone())
+        {
+            let description = format!(
+                "{}<{}> for provider {}",
+                provider_trait, context_type, outer_rel.provider_type
+            );
+            let mut outer_node = DependencyNode {
+                description: strip_module_prefixes(&description),
+                trait_type: Some("provider trait".to_string()),
+                is_satisfied: None,
+                children: Vec::new(),
+            };
+
+            // Add getter requirements and inner provider as children
+            let getter_children = build_getter_nodes(entry, context_type);
+            outer_node.children.extend(getter_children);
+
+            // Add inner provider node if exists
+            if let Some(inner_provider) = all_inner_providers.first() {
+                let inner_desc = format!(
+                    "{}<{}> for inner provider {}",
+                    provider_trait, context_type, inner_provider
+                );
+                let inner_node = DependencyNode {
+                    description: strip_module_prefixes(&inner_desc),
+                    trait_type: Some("provider trait".to_string()),
+                    is_satisfied: Some(true), // Inner is OK if outer has the error
+                    children: Vec::new(),
+                };
+                outer_node.children.push(inner_node);
+            }
+
+            provider_nodes.push(outer_node);
+        }
+    } else if let Some(rel) = deduped_relationships.first() {
+        // Simple provider (no higher-order)
+        if let Some(provider_trait) = &entry
+            .component_info
+            .as_ref()
+            .and_then(|c| c.provider_trait.clone())
+        {
+            let description = format!(
+                "{}<{}> for provider {}",
+                provider_trait, context_type, rel.provider_type
+            );
+            let mut provider_node = DependencyNode {
+                description: strip_module_prefixes(&description),
+                trait_type: Some("provider trait".to_string()),
+                is_satisfied: None,
+                children: Vec::new(),
+            };
+
+            // Add getter requirements as children
+            let getter_children = build_getter_nodes(entry, context_type);
+            provider_node.children = getter_children;
+
+            provider_nodes.push(provider_node);
+        }
+    }
+
+    provider_nodes
+}
+
+/// Builds getter trait nodes from delegation notes
+fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<DependencyNode> {
+    let mut getter_nodes = Vec::new();
+
+    // Look for "HasXxx" patterns in delegation notes
+    for note in &entry.delegation_notes {
+        if let Some(getter_trait) = extract_getter_trait_from_note(note) {
+            let mut getter_node = DependencyNode {
+                description: format!("{} for {}", getter_trait, context_type),
+                trait_type: Some("getter trait".to_string()),
+                is_satisfied: None,
+                children: Vec::new(),
+            };
+
+            // If we have field info, add the field requirement as a child
+            // We add it to the first getter trait we find, since that's typically the most relevant one
+            if getter_nodes.is_empty() {
+                if let Some(field_info) = &entry.field_info {
+                    let formatted_field = format_field_name(&field_info.field_name);
+                    let field_node = DependencyNode {
+                        description: format!(
+                            "field `{}` on {}",
+                            formatted_field, field_info.target_type
+                        ),
+                        trait_type: None,
+                        is_satisfied: Some(false), // This is the missing field
+                        children: Vec::new(),
+                    };
+                    getter_node.children.push(field_node);
+                }
+            }
+
+            getter_nodes.push(getter_node);
+        }
+    }
+
+    getter_nodes
+}
+
+/// Extracts consumer trait from delegation notes
+fn extract_consumer_trait_from_notes(notes: &[String], context_type: &str) -> Option<String> {
+    // Look for "Can*" traits in the notes, but exclude CanUseComponent (that's the check trait wrapper)
+    for note in notes {
+        if let Some(trait_name) = extract_trait_from_note(note) {
+            if trait_name.starts_with("Can") && !trait_name.contains("CanUseComponent") {
+                return Some(format!("{} for {}", trait_name, context_type));
+            }
+        }
+    }
+    None
+}
+
+/// Extracts getter trait name from a delegation note
+fn extract_getter_trait_from_note(note: &str) -> Option<String> {
+    // Look for "to implement `HasXxx`" pattern
+    if let Some(trait_name) = extract_trait_from_note(note) {
+        // Only return if it looks like a getter trait (Has*)
+        if trait_name.starts_with("Has") {
+            return Some(trait_name);
+        }
+    }
+    None
+}
+
+/// Extracts any trait name from a delegation note
+fn extract_trait_from_note(note: &str) -> Option<String> {
+    if let Some(start) = note.find("to implement `") {
+        let after_start = start + "to implement `".len();
+        if let Some(end) = note[after_start..].find('`') {
+            let trait_name = &note[after_start..after_start + end];
+            let cleaned = strip_module_prefixes(trait_name);
+            // Further clean up IsProviderFor patterns
+            if cleaned.starts_with("IsProviderFor<") {
+                // Extract the component/trait from IsProviderFor<Component, Context>
+                if let Some(inner_start) = cleaned.find('<') {
+                    let after_bracket = inner_start + 1;
+                    if let Some(comma_pos) = cleaned[after_bracket..].find(',') {
+                        // Just return the component part
+                        return Some(
+                            cleaned[after_bracket..after_bracket + comma_pos]
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                }
+                // If parsing fails, return None to skip this
+                return None;
+            }
+            return Some(cleaned);
+        }
+    }
+    None
+}
+
+/// Extracts any trait name from a delegation note
+fn extract_context_from_notes(notes: &[String]) -> Option<String> {
+    for note in notes {
+        // Look for "for `Type` to implement" pattern
+        if let Some(start) = note.find("for `") {
+            let after_start = start + 5;
+            if let Some(end) = note[after_start..].find("` to") {
+                let type_name = &note[after_start..after_start + end];
+                return Some(strip_module_prefixes(type_name));
+            }
+        }
+    }
+    None
+}
+
 /// Formats the delegation chain with better structure and CGP-aware terminology
 fn format_delegation_chain(entry: &DiagnosticEntry) -> Vec<String> {
+    // Try to build a proper dependency tree
+    if let Some(tree) = build_dependency_tree(entry) {
+        return render_dependency_tree(&tree, "", true, true);
+    }
+
+    // Fallback to old format if tree building fails
+    format_delegation_chain_legacy(entry)
+}
+
+/// Legacy delegation chain formatting (fallback)
+fn format_delegation_chain_legacy(entry: &DiagnosticEntry) -> Vec<String> {
     // Detect inner providers BEFORE deduplication
     let all_inner_providers: Vec<String> = detect_inner_providers(&entry.provider_relationships);
 

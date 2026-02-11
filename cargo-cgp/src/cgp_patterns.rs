@@ -381,13 +381,21 @@ pub fn strip_module_prefixes(message: &str) -> String {
     // This is a generic transformation - we don't hardcode specific module names
     let mut result = message.to_string();
 
-    // Remove cgp library prefixes
-    result = result.replace("cgp::prelude::", "");
-    result = result.replace("cgp::", "");
+    // Remove cgp library prefixes - do this multiple times to handle nested cases
+    for _ in 0..5 {
+        result = result.replace("cgp::prelude::", "");
+        result = result.replace("cgp::", "");
+    }
 
-    // For user module prefixes, we need a more sophisticated approach
-    // We'll use a regex-like pattern to match any `module::path::Type` and keep only `Type`
-    // But we need to be careful not to break trait implementations
+    // Remove IsProviderFor wrapper that sometimes appears
+    // This handles cases like "IsProviderFor<AreaCalculator<..."
+    if result.starts_with("IsProviderFor<") {
+        // Extract what's inside and clean it up
+        if let Some(start) = result.find('<') {
+            let after_start = start + 1;
+            result = result[after_start..].to_string();
+        }
+    }
 
     result
 }
