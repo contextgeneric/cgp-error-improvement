@@ -54,15 +54,26 @@ pub fn is_transitive_failure(entry: &DiagnosticEntry, all_entries: &[&Diagnostic
 }
 
 /// Checks if two entries are at the same source location
+/// With multiple spans, we check if any spans match
 fn entry_locations_match(a: &DiagnosticEntry, b: &DiagnosticEntry) -> bool {
-    match (&a.primary_span, &b.primary_span) {
-        (Some(span_a), Some(span_b)) => {
-            span_a.file_name == span_b.file_name
+    // If either entry has no spans, they can't match
+    if a.primary_spans.is_empty() || b.primary_spans.is_empty() {
+        return false;
+    }
+
+    // Check if any span from a matches any span from b
+    for span_a in &a.primary_spans {
+        for span_b in &b.primary_spans {
+            if span_a.file_name == span_b.file_name
                 && span_a.line_start == span_b.line_start
                 && span_a.column_start == span_b.column_start
+            {
+                return true;
+            }
         }
-        _ => false,
     }
+
+    false
 }
 
 /// Deduplicates provider relationships by removing nested redundancies

@@ -19,6 +19,8 @@ We should generalize the error processing, so that it can relate CGP errors acro
 
 Your changes must not affect the output from the other examples, in particular: `base_area.rs`, `base_area_2.rs`, `scaled_area.rs`, `scaled_area_2.rs`, `density.rs`, `density_2.rs`.
 
+If the source JSON error message do not contain sufficient information for you to reconstruct the suggested error message, then omit those details. You must not hard code anything about user-provided code in the code base.
+
 Following is the suggestion for improved error message for `density_3.rs`:
 
 ```

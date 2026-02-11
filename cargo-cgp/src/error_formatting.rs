@@ -4,7 +4,7 @@ use miette::{
 
 use crate::cgp_diagnostic::CgpDiagnostic;
 use crate::cgp_patterns::{
-    ProviderRelationship, derive_provider_trait_name, strip_module_prefixes,
+    ComponentInfo, ProviderRelationship, derive_provider_trait_name, strip_module_prefixes,
 };
 use crate::diagnostic_db::DiagnosticEntry;
 use crate::root_cause::{deduplicate_delegation_notes, deduplicate_provider_relationships};
@@ -76,31 +76,50 @@ fn format_missing_field_error(
     // Build help message with clear sections
     let mut help_sections = Vec::new();
 
-    // Get component name for context
-    let component_name = entry
-        .component_info
-        .as_ref()
+    // Get component names for context
+    // If we have multiple components, we'll list them all
+    let component_names: Vec<String> = entry
+        .component_infos
+        .iter()
         .map(|c| strip_module_prefixes(&c.component_type))
-        .filter(|name| !name.contains("IsProviderFor<") && !name.contains("CanUseComponent<"));
+        .filter(|name| !name.contains("IsProviderFor<") && !name.contains("CanUseComponent<"))
+        .collect();
 
     // Section 1: High-level context
     if entry.field_info.is_some() {
-        if let Some(comp_name) = &component_name {
-            help_sections.push(format!(
-                "Context `{}` is missing a required field to use `{}`.",
-                field_info.target_type, comp_name
-            ));
+        if !component_names.is_empty() {
+            if component_names.len() == 1 {
+                help_sections.push(format!(
+                    "Context `{}` is missing a required field to use `{}`.",
+                    field_info.target_type, component_names[0]
+                ));
+            } else {
+                // Multiple components affected
+                let components_list = component_names.join("`, `");
+                help_sections.push(format!(
+                    "Context `{}` is missing a required field to use multiple components: `{}`.",
+                    field_info.target_type, components_list
+                ));
+            }
         } else {
             help_sections.push(format!(
                 "Context `{}` is missing a required field.",
                 field_info.target_type
             ));
         }
-    } else if let Some(comp_name) = &component_name {
-        help_sections.push(format!(
-            "Context `{}` is missing a required field to use `{}`.",
-            field_info.target_type, comp_name
-        ));
+    } else if !component_names.is_empty() {
+        if component_names.len() == 1 {
+            help_sections.push(format!(
+                "Context `{}` is missing a required field to use `{}`.",
+                field_info.target_type, component_names[0]
+            ));
+        } else {
+            let components_list = component_names.join("`, `");
+            help_sections.push(format!(
+                "Context `{}` is missing a required field to use multiple components: `{}`.",
+                field_info.target_type, components_list
+            ));
+        }
     }
 
     // Add note about missing field or derive
@@ -127,7 +146,8 @@ fn format_missing_field_error(
     }
 
     // Section 3: Struct location (if we have source span)
-    if let Some(span) = &entry.primary_span {
+    // Use the first span if available
+    if let Some(span) = entry.primary_spans.first() {
         help_sections.push(format!(
             "The struct `{}` is defined at `{}:{}` but does not have the required field `{}`.",
             field_info.target_type, span.file_name, span.line_start, formatted_field_name
@@ -174,7 +194,7 @@ fn format_missing_field_error(
     // Section 7: How to fix
     help_sections.push("To fix this error:".to_string());
     if entry.has_other_hasfield_impls {
-        if let Some(span) = &entry.primary_span {
+        if let Some(span) = entry.primary_spans.first() {
             help_sections.push(format!(
                 "    • Add a field `{}` to the `{}` struct at {}:{}",
                 field_info.field_name, field_info.target_type, span.file_name, span.line_start
@@ -186,7 +206,7 @@ fn format_missing_field_error(
             ));
         }
     } else {
-        if let Some(span) = &entry.primary_span {
+        if let Some(span) = entry.primary_spans.first() {
             help_sections.push(format!(
                 "    • If the struct has the field `{}`, add `#[derive(HasField)]` to the struct definition at `{}:{}`",
                 field_info.field_name, span.file_name, span.line_start
@@ -275,29 +295,32 @@ fn format_generic_cgp_error(entry: &DiagnosticEntry) -> Option<CgpDiagnostic> {
 }
 
 /// Builds source code and labeled spans from diagnostic entry
+/// When there are multiple components, creates a label for each span
 fn build_source_and_labels(
     entry: &DiagnosticEntry,
 ) -> (Option<NamedSource<String>>, Vec<LabeledSpan>) {
-    let span = match &entry.primary_span {
-        Some(s) => s,
-        None => return (None, vec![]),
-    };
+    if entry.primary_spans.is_empty() {
+        return (None, vec![]);
+    }
+
+    // Use the first span to determine the file
+    let first_span = &entry.primary_spans[0];
 
     // Try to read the actual source file to get proper content and offsets
     // The file_name might be absolute or relative
-    let file_result = std::fs::read_to_string(&span.file_name).or_else(|_| {
+    let file_result = std::fs::read_to_string(&first_span.file_name).or_else(|_| {
         // If the path is relative, try from the workspace root
         // Look for common workspace patterns
         if let Ok(current_dir) = std::env::current_dir() {
             // Try current directory first
-            let candidate1 = current_dir.join(&span.file_name);
+            let candidate1 = current_dir.join(&first_span.file_name);
             if let Ok(content) = std::fs::read_to_string(&candidate1) {
                 return Ok(content);
             }
 
             // Try parent directory (in case we're in a subdirectory)
             if let Some(parent) = current_dir.parent() {
-                let candidate2 = parent.join(&span.file_name);
+                let candidate2 = parent.join(&first_span.file_name);
                 if let Ok(content) = std::fs::read_to_string(&candidate2) {
                     return Ok(content);
                 }
@@ -312,43 +335,49 @@ fn build_source_and_labels(
     match file_result {
         Ok(file_content) => {
             // Use the actual file content
-            let source_code = NamedSource::new(&span.file_name, file_content.clone());
+            let source_code = NamedSource::new(&first_span.file_name, file_content.clone());
 
-            // Calculate byte offset in the actual file
-            // Count bytes up to the line, then add column offset
-            let lines: Vec<&str> = file_content.lines().collect();
+            // Create a labeled span for each primary span
+            let mut labels = Vec::new();
 
-            let mut byte_offset = 0;
+            for span in &entry.primary_spans {
+                // Calculate byte offset in the actual file
+                let lines: Vec<&str> = file_content.lines().collect();
 
-            // Add bytes for all lines before the target line (1-indexed)
-            for (line_idx, line) in lines.iter().enumerate() {
-                if line_idx + 1 < span.line_start {
-                    byte_offset += line.len() + 1; // +1 for newline
-                } else {
-                    break;
+                let mut byte_offset = 0;
+
+                // Add bytes for all lines before the target line (1-indexed)
+                for (line_idx, line) in lines.iter().enumerate() {
+                    if line_idx + 1 < span.line_start {
+                        byte_offset += line.len() + 1; // +1 for newline
+                    } else {
+                        break;
+                    }
                 }
+
+                // Add column offset (1-indexed, so subtract 1)
+                byte_offset += span.column_start.saturating_sub(1);
+
+                let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+
+                let label_text = span
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "unsatisfied trait bound".to_string());
+
+                let labeled_span = LabeledSpan::new_with_span(
+                    Some(label_text),
+                    SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+                );
+
+                labels.push(labeled_span);
             }
 
-            // Add column offset (1-indexed, so subtract 1)
-            byte_offset += span.column_start.saturating_sub(1);
-
-            let span_length = span.column_end.saturating_sub(span.column_start).max(1);
-
-            let label_text = span
-                .label
-                .clone()
-                .unwrap_or_else(|| "error occurs here".to_string());
-
-            let labeled_span = LabeledSpan::new_with_span(
-                Some(label_text),
-                SourceSpan::new(SourceOffset::from(byte_offset), span_length),
-            );
-
-            (Some(source_code), vec![labeled_span])
+            (Some(source_code), labels)
         }
         Err(_) => {
-            // Fallback: reconstruct from span text
-            let source_text = span
+            // Fallback: reconstruct from span text of the first span
+            let source_text = first_span
                 .text
                 .iter()
                 .map(|line| line.text.as_str())
@@ -360,23 +389,29 @@ fn build_source_and_labels(
                 return (None, vec![]);
             }
 
-            let source_code = NamedSource::new(&span.file_name, source_text);
+            let source_code = NamedSource::new(&first_span.file_name, source_text);
 
-            // For fallback, use simple column offset
-            let byte_offset = span.column_start.saturating_sub(1);
-            let span_length = span.column_end.saturating_sub(span.column_start).max(1);
+            // For fallback, create simple labels for each span
+            let mut labels = Vec::new();
 
-            let label_text = span
-                .label
-                .clone()
-                .unwrap_or_else(|| "error occurs here".to_string());
+            for span in &entry.primary_spans {
+                let byte_offset = span.column_start.saturating_sub(1);
+                let span_length = span.column_end.saturating_sub(span.column_start).max(1);
 
-            let labeled_span = LabeledSpan::new_with_span(
-                Some(label_text),
-                SourceSpan::new(SourceOffset::from(byte_offset), span_length),
-            );
+                let label_text = span
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "unsatisfied trait bound".to_string());
 
-            (Some(source_code), vec![labeled_span])
+                let labeled_span = LabeledSpan::new_with_span(
+                    Some(label_text),
+                    SourceSpan::new(SourceOffset::from(byte_offset), span_length),
+                );
+
+                labels.push(labeled_span);
+            }
+
+            (Some(source_code), labels)
         }
     }
 }
@@ -457,6 +492,7 @@ fn derive_component_from_consumer_trait(consumer_trait: &str) -> Option<String> 
 }
 
 /// Builds a dependency tree from delegation notes and provider relationships
+/// When there are multiple components, builds a combined tree showing all paths
 fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
     // Build root node from check trait
     let check_trait = entry.check_trait.as_ref()?;
@@ -476,10 +512,8 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
         children: Vec::new(),
     };
 
-    // Add consumer trait level
-    if let Some(component_info) = &entry.component_info {
-        // For the top-level consumer trait, use component-based description
-        // Don't try to extract from notes, as that may give us a nested consumer trait
+    // Add consumer trait level(s) - one for each component
+    for component_info in &entry.component_infos {
         let component_name = strip_module_prefixes(&component_info.component_type);
         let consumer_desc = format!(
             "consumer trait of `{}` for `{}`",
@@ -493,18 +527,38 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
             children: Vec::new(),
         };
 
-        // Add provider level(s)
-        let provider_nodes = build_provider_nodes(entry, &context_type);
+        // Add provider level(s) for this component
+        let provider_nodes =
+            build_provider_nodes_for_component(entry, &context_type, Some(component_info));
         consumer_node.children = provider_nodes;
 
         root.children.push(consumer_node);
+    }
+
+    // If no component info, try building without it (fallback)
+    if entry.component_infos.is_empty() && !entry.provider_relationships.is_empty() {
+        let provider_nodes = build_provider_nodes_for_component(entry, &context_type, None);
+        root.children.extend(provider_nodes);
     }
 
     Some(root)
 }
 
 /// Builds provider nodes from provider relationships
+/// This is now a wrapper that calls the component-specific version
 fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<DependencyNode> {
+    // Use the first component if available, otherwise None
+    let component_info = entry.component_infos.first();
+    build_provider_nodes_for_component(entry, context_type, component_info)
+}
+
+/// Builds provider nodes for a specific component
+/// If component_info is None, builds nodes based on provider relationships alone
+fn build_provider_nodes_for_component(
+    entry: &DiagnosticEntry,
+    context_type: &str,
+    component_info: Option<&ComponentInfo>,
+) -> Vec<DependencyNode> {
     let deduped_relationships = deduplicate_provider_relationships(&entry.provider_relationships);
     let all_inner_providers = detect_inner_providers(&entry.provider_relationships);
 
@@ -522,11 +576,7 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
 
     if let Some(outer_rel) = outer_providers.first() {
         // This is a higher-order provider
-        if let Some(provider_trait) = &entry
-            .component_info
-            .as_ref()
-            .and_then(|c| c.provider_trait.clone())
-        {
+        if let Some(provider_trait) = component_info.and_then(|c| c.provider_trait.clone()) {
             let description = format!(
                 "{}<{}> for provider {}",
                 provider_trait, context_type, outer_rel.provider_type
@@ -568,11 +618,7 @@ fn build_provider_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depe
         }
     } else if let Some(rel) = deduped_relationships.first() {
         // Simple provider (no higher-order)
-        if let Some(provider_trait) = &entry
-            .component_info
-            .as_ref()
-            .and_then(|c| c.provider_trait.clone())
-        {
+        if let Some(provider_trait) = component_info.and_then(|c| c.provider_trait.clone()) {
             let description = format!(
                 "{}<{}> for provider {}",
                 provider_trait, context_type, rel.provider_type
