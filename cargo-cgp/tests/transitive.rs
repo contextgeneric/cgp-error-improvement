@@ -84,12 +84,13 @@ fn test_density_3_error() {
             
             Dependency chain:
                 CanUseRectangle for Rectangle (check trait)
+                ├─ requires: CanCalculateArea for Rectangle (consumer trait)
+                │  └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
+                │     └─ requires: HasRectangleFields for Rectangle (getter trait)
+                │        └─ requires: field `height` on Rectangle ✗
                 └─ requires: consumer trait of `DensityCalculatorComponent` for `Rectangle` (consumer trait)
                    └─ requires: DensityCalculator<Rectangle> for provider DensityFromMassField (provider trait)
-                      └─────└─ requires: CanCalculateArea for Rectangle (consumer trait)
-                                └─ requires: AreaCalculator<Rectangle> for provider RectangleArea (provider trait)
-                                   └─ requires: HasRectangleFields for Rectangle (getter trait)
-                                      └─ requires: field `height` on Rectangle ✗
+                      └─ requires: CanCalculateArea for Rectangle (consumer trait) (*)
             
             To fix this error:
                 • Add a field `height` to the `Rectangle` struct at examples/src/density_3.rs:66
