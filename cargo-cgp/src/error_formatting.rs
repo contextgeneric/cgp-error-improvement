@@ -441,7 +441,7 @@ fn render_dependency_tree(
         result.push(line);
     } else {
         let branch = if is_last { "└─" } else { "├─" };
-        let mut line = format!("{}{} requires: {}", prefix, branch, node.description);
+        let mut line = format!("{}{} {}", prefix, branch, node.description);
 
         // Add trait type annotation if present
         if let Some(ref trait_type) = node.trait_type {
@@ -619,7 +619,9 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
         })?;
 
     let mut root = DependencyNode {
-        description: format!("{} for {}", check_trait, context_type),
+        // Wrap trait and type names in backticks for consistent code construct formatting
+        // Rationale: Backticks visually distinguish code elements from descriptive text
+        description: format!("`{}` for `{}`", check_trait, context_type),
         trait_type: Some("check trait".to_string()),
         is_satisfied: None,
         is_reference: false,
@@ -640,10 +642,12 @@ fn build_dependency_tree(entry: &DiagnosticEntry) -> Option<DependencyNode> {
         let (consumer_desc, consumer_trait_name) =
             if let Some(trait_name) = find_consumer_trait_for_component(&component_name, entry) {
                 // Found the actual consumer trait - use it directly
-                let desc = format!("{} for {}", trait_name, context_type);
+                // Wrap both trait name and context type in backticks
+                let desc = format!("`{}` for `{}`", trait_name, context_type);
                 (desc, Some(trait_name.clone()))
             } else {
                 // Fallback to generic description
+                // Note: component_name and context_type are already wrapped in backticks
                 let desc = format!(
                     "consumer trait of `{}` for `{}`",
                     component_name, context_type
@@ -740,8 +744,9 @@ fn build_provider_nodes_for_component(
                 .iter()
                 .any(|inner| is_contained_type_parameter(inner, &rel.provider_type));
 
+            // Wrap all code constructs in backticks: provider trait, context type, and provider type
             let description = format!(
-                "{}<{}> for provider {}",
+                "`{}<{}>` for provider `{}`",
                 provider_trait, context_type, rel.provider_type
             );
             let mut provider_node = DependencyNode {
@@ -792,8 +797,9 @@ fn build_provider_nodes_for_component(
             // If this is a higher-order provider, add inner provider as info node
             if is_higher_order {
                 if let Some(inner_provider) = all_inner_providers.first() {
+                    // Wrap inner provider description with backticks
                     let inner_desc = format!(
-                        "{}<{}> for inner provider {}",
+                        "`{}<{}>` for inner provider `{}`",
                         provider_trait, context_type, inner_provider
                     );
                     let inner_node = DependencyNode {
@@ -822,7 +828,8 @@ fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depend
     for note in &entry.delegation_notes {
         if let Some(getter_trait) = extract_getter_trait_from_note(note) {
             let mut getter_node = DependencyNode {
-                description: format!("{} for {}", getter_trait, context_type),
+                // Wrap getter trait name and context type in backticks
+                description: format!("`{}` for `{}`", getter_trait, context_type),
                 trait_type: Some("getter trait".to_string()),
                 is_satisfied: None,
                 is_reference: false,
@@ -835,8 +842,9 @@ fn build_getter_nodes(entry: &DiagnosticEntry, context_type: &str) -> Vec<Depend
                 if let Some(field_info) = &entry.field_info {
                     let formatted_field = format_field_name(&field_info.field_name);
                     let field_node = DependencyNode {
+                        // Wrap both field name and target type in backticks
                         description: format!(
-                            "field `{}` on {}",
+                            "field `{}` on `{}`",
                             formatted_field, field_info.target_type
                         ),
                         trait_type: None,
@@ -914,8 +922,9 @@ fn build_nested_consumer_provider_nodes(
     let is_shared_component = matching_component.is_some();
 
     // Create a node for the nested consumer trait
+    // Wrap consumer trait name and context type in backticks
     let consumer_desc = format!(
-        "{} for {}",
+        "`{}` for `{}`",
         nested_consumer.trait_name, nested_consumer.context_type
     );
     let mut consumer_node = DependencyNode {
@@ -942,8 +951,9 @@ fn build_nested_consumer_provider_nodes(
                 match_component_to_provider(component_info, &entry.provider_relationships)
             {
                 if let Some(provider_trait) = component_info.provider_trait.clone() {
+                    // Wrap all code constructs in backticks
                     let provider_desc = format!(
-                        "{}<{}> for provider {}",
+                        "`{}<{}>` for provider `{}`",
                         provider_trait, nested_consumer.context_type, provider_rel.provider_type
                     );
 
@@ -970,8 +980,9 @@ fn build_nested_consumer_provider_nodes(
         // Try to extract the unsatisfied provider from the main error message
         if let Some(unsatisfied) = extract_unsatisfied_provider_from_message(&entry.message) {
             // Create a provider node that's marked as unsatisfied
+            // Wrap all code constructs in backticks
             let provider_desc = format!(
-                "{}<{}> for provider {}",
+                "`{}<{}>` for provider `{}`",
                 unsatisfied.trait_name, unsatisfied.context_type, unsatisfied.provider_type
             );
 

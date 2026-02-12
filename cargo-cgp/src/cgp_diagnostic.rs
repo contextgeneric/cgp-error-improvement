@@ -26,9 +26,11 @@ impl std::error::Error for CgpDiagnostic {}
 
 impl Diagnostic for CgpDiagnostic {
     fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        self.code
-            .as_ref()
-            .map(|c| Box::new(c.clone()) as Box<dyn fmt::Display>)
+        // Always return None to suppress error code display like "E0277"
+        // Rationale: CGP error codes are not useful for users since the errors
+        // are framework-specific trait bound failures. The improved error message
+        // itself provides all the necessary context for diagnosis.
+        None
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
